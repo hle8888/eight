@@ -94,9 +94,9 @@ class Object {
 
                 if (texture != null) {
                     var tColor:Int = texture.tex[x][y];
-                    if(tColor != 0x000000) Engine.drawVector(pos.x + rotatedX, pos.y + rotatedY, 0, tColor);
+                    if(tColor != 0x000000) Engine.drawDot(pos.x + rotatedX, pos.y + rotatedY, 0, tColor);
                 } else {
-                    Engine.drawVector(pos.x + rotatedX, pos.y + rotatedY, 0, color);
+                    Engine.drawDot(pos.x + rotatedX, pos.y + rotatedY, 0, color);
                 }
             }
         }
@@ -106,8 +106,13 @@ class Object {
     public var standartTexture:Texture;
     public var selectable:Bool = false;
     public var selected:Bool = false;
-    public function select(select:Bool) {
-        selected = select;
+    public function select(isSelected:Bool) {
+        selected = isSelected;
+        if (isSelected) { //!Std.isOfType(this, Button)
+            Eight.currentSelected = this;
+            
+            setOutline(isSelected);
+        }
     }
 
     public function checkSelect(mx:Float, my:Float):Bool {
@@ -147,11 +152,80 @@ class Object {
     }
 }
 
+class Line extends Object {
+    public var pos1:Vec3;
+    public var pos2:Vec3;
+
+    public var show:Bool = true;
+
+    public function new(_pos1:Vec3, _pos2:Vec3, texturePath:String=null, _color:Int=0xD6D3D3) {
+        super();
+        setSize(20, 20);
+        color = _color;
+
+        pos1 = _pos1;
+        pos2 = _pos2;
+    }
+
+    public override function draw() {
+        if (!show) return;
+
+        var steps = 100; 
+        for (i in 0...steps) {
+            var t = i / steps;
+
+            var x = pos1[0] + (pos2[0] - pos1[0]) * t;
+            var y = pos1[1] + (pos2[1] - pos1[1]) * t;
+            var z = pos1[2] + (pos2[2] - pos1[2]) * t;
+
+            Engine.drawDot(x, y, z, color);
+        }
+    }
+}
+
+class Circle extends Object {
+    public var r:Int;
+
+    public function new(_pos:Vec3, _r:Int, texturePath:String=null, _color:Int=0xD6D3D3) {
+        super();
+        setSize(_r+4, _r+4);
+        color = _color;
+
+        pos = _pos;
+        r = _r;
+    }
+
+    public override function draw() {
+        var steps = 100;
+
+        for (i in 0...steps) {
+            var angle = (i / steps) * Math.PI * 2;
+
+            var px = pos[0] + Math.cos(angle) * r;
+            var py = pos[1] + Math.sin(angle) * r;
+            var pz = 0;
+
+            Engine.drawDot(px, py, pz, color);
+        }
+    }
+
+    public override function setOutline(outline:Bool=true) {
+        if (selected)
+            color = 0x4A9E51;
+        else 
+            color = 0xD6D3D3;
+    }
+}
+
 class Eight {
+    public static var zoom:Float = 0.8;
+    public static var cameraOffset = new Vec3(0, 0, 0);
+
     public static var objects:Array<Object> = []; //objects to draw
+    public static var currentSelected:Object;
 
     public var window:sdl.Window;
-    public var screenW = 1600; public var screenH = 900;
+    public static var screenW = 1600; public static var screenH = 900;
 
     public function new() {
         FastTrig.init();
@@ -181,8 +255,13 @@ class Eight {
             var dt = now - lastTime;
             lastTime = now;
 
+            Engine.vertices = [];
             var i:Int = -1; while(++i < objects.length) objects[i].draw(); 
             update(dt);
+
+            //Engine.drawDot(0, 0, 0); // центр экрана
+            //Engine.drawCube(0, 0, 0, 0.5);  // куб в центре экрана, размер 0.5
+
             Engine.computeShaders();
             window.present();
 
@@ -241,6 +320,8 @@ class Eight {
 }
 
 class Engine {
+    static var fullscreenQuad = true;
+
     static var data:hl.Bytes; 
     static var result:hl.Bytes;
     
@@ -256,7 +337,6 @@ class Engine {
 
         stride = Std.int(n*l); count = Std.int(n*n2*4);
         data = hl.Bytes.fromBytes(haxe.io.Bytes.alloc(count));
-        //result = hl.Bytes.fromBytes(haxe.io.Bytes.alloc(count));
     }
 
     public static function initShaderEngine() {
@@ -264,11 +344,11 @@ class Engine {
         GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, ssbo);
 
         //shaderCompute = compileShader(GL.createShader(GL.COMPUTE_SHADER), shaderSource);
-        shaderRender = compileShader(GL.createShader(GL.VERTEX_SHADER), vertexSrc, false);
-        shaderRender = compileShader(GL.createShader(GL.FRAGMENT_SHADER), fragSrc, true, shaderRender);
+        shaderRender = compileShader(GL.createShader(GL.VERTEX_SHADER), fullscreenQuad ? vertexSrcQuad : vertexSrc, false);
+        shaderRender = compileShader(GL.createShader(GL.FRAGMENT_SHADER), fullscreenQuad ? fragSrcQuad : fragSrc, true, shaderRender);
     }
 
-    static var shaderSource = "#version 430
+    /* static var shaderSource = "#version 430
             layout(local_size_x = 1, local_size_y = 1) in; 
             struct XYZW { float x; float y; float z; float w; }; layout(std430, binding = 0) buffer Data { XYZW values[]; };
             //layout(rgba32f, binding = 1) uniform image2D outImage;
@@ -285,30 +365,22 @@ class Engine {
 
                 //imageStore(outImage, pixel, vec4(1.0, 0.0, 0.0, 1.0)); 
             }
-    ";
-
-    static var vertexSrc = "#version 430
+    "; */
+    //FULLSCREEN QUAD
+    static var vertexSrcQuad = "#version 430
         in vec3 inPos;
         in vec2 inColor;        
         uniform vec4 uTexelSize;
         out vec2 uv;
 
-        //layout(std430, binding = 0) buffer ModelBuffer { vec4 positions[]; };
-        //uniform samplerBuffer positions;   // буфер-текстура с твоими vec4
         uniform sampler2D uTexture;   // текстура
         uniform sampler2D uColorMap;  // TEXTURE1
         void main() {
-            //gl_Position = texelFetch(uDataTex, ivec2(x,y),0);
-            
-            //const float PI = 3.14159265359;
-            //const float xangle = 0.0;
-            //vec2 pos = vec2(cos(xangle * PI / 180) * inPos.x, inPos.y); 
-
             gl_Position = vec4(inPos, 1.0);               
             uv = inColor;            
         }
     ";
-    static var fragSrc = "#version 430
+    static var fragSrcQuad = "#version 430
         in vec2 uv;                   // получаем UV
         uniform sampler2D uTexture;   // текстура
         uniform sampler2D uColorMap;  // TEXTURE1
@@ -321,57 +393,30 @@ class Engine {
             vec4 left  = texture(uColorMap, uv + vec2(-uTexelSize.x, 0.0));
             vec4 right = texture(uColorMap, uv + vec2( uTexelSize.x, 0.0));
             color = max(max(center, up), max(max(down, left), right)); 
-
-            /* //vec4 center = texture(uColorMap, uv);
-            float sigmaColor = 0.2; // чувствительность по цвету
-            float sigmaSpace = 1.0; // чувствительность по расстоянию
-            vec4 sum = vec4(0.0);
-            float wsum = 0.0;
-            for (int y = -1; y <= 1; ++y) {
-                for (int x = -1; x <= 1; ++x) {
-                    vec2 offset = vec2(x, y) * vec2(uTexelSize.x, uTexelSize.y);
-                    vec4 sampl = texture(uColorMap, uv + offset);
-
-                    float dist2 = float(x*x + y*y);
-                    float spaceWeight = exp(-dist2 / (2.0 * sigmaSpace * sigmaSpace));
-
-                    float colorDiff = length(sampl.rgb - center.rgb);
-                    float colorWeight = exp(-(colorDiff * colorDiff) / (2.0 * sigmaColor * sigmaColor));
-
-                    float weight = spaceWeight * colorWeight;
-                    sum += sampl * weight;
-                    wsum += weight;
-                }
-            }
-            color = sum / wsum; */
-
-
-
-
-            /* vec4 sum = vec4(0.0); //color blur
-            sum += texture(uColorMap, uv + vec2(-uTexelSize.x,  0.0));
-            sum += texture(uColorMap, uv + vec2( uTexelSize.x,  0.0));
-            sum += texture(uColorMap, uv + vec2( 0.0, -uTexelSize.y));
-            sum += texture(uColorMap, uv + vec2( 0.0,  uTexelSize.y));
-            color = (texture(uColorMap, uv) * 2.0 + sum) / 6.0; */
-
-            /* vec4 sum = vec4(0.0);
-            int radius = 1;
-            int count = 0;
-            for (int y = -radius; y <= radius; ++y)
-                for (int x = -radius; x <= radius; ++x) {
-                    sum += texture(uColorMap, uv + vec2(x, y) * vec2(uTexelSize.x, uTexelSize.y));
-                    count++;
-                }
-            color = sum / float(count); */
-
-            //float contrast = 3.0; 
-            //color.rgb = (color.rgb - 0.5) * contrast + 0.5; 
-            
-            //color = vec4(_inPos * 0.5 + 0.5, 0.0, 1.0); // debuggin red - x, green - y
-            //color = vec4(uv, 0.0, 1.0); // debuggin red - x, green - y
         }
-    ";
+    "; 
+    //STANDART PIPELINE
+    static var vertexSrc = "#version 430
+        in vec3 inPos;
+        in vec3 inColor;
+
+        uniform mat4 uProjection;
+        uniform mat4 uView;
+
+        out vec3 vColor;
+
+        void main() {
+            //gl_Position = uProjection * uView * vec4(inPos, 1.0);
+            gl_Position = vec4(inPos, 1.0);
+            vColor = inColor;
+        }";
+
+    static var fragSrc = "#version 430
+        in vec3 vColor;
+        out vec4 color;
+        void main() {
+            color = vec4(vColor, 1.0);
+        }";
 
     static var shaderCompute:sdl.Program;
     static var shaderRender:sdl.Program;
@@ -393,59 +438,30 @@ class Engine {
         return prog;
     } 
 
+    public static var vertices:Array<Float> = [];
+    public static var vbo:sdl.Buffer;
+    public static var vao:sdl.VertexArray;
     public static function createRenderTexture() {	
-        //loading rgb texture in unit 1	
-        /*
-        final TEXTURE_WIDTH = 512; final TEXTURE_HEIGHT = 512;
-		final rawPngData = File.getBytes('rgb.png');
-		final pixelsData = haxe.io.Bytes.alloc(TEXTURE_WIDTH * TEXTURE_HEIGHT * 4);
-		if (!Format.decodePNG(hl.Bytes.fromBytes(rawPngData), rawPngData.length, pixelsData, TEXTURE_WIDTH, TEXTURE_HEIGHT, 0, PixelFormat.RGBA, 0))
-			throw 'Failed to decode PNG data'; 
-
-        GL.activeTexture(GL.TEXTURE1);
-        final texture = GL.createTexture(); 
-		GL.bindTexture(GL.TEXTURE_2D, texture);
-        //GL.bindImageTexture(0, texture, 0, false, 0, GL.READ_WRITE, GL.RGBA8);
-        GL.texImage2D(GL.TEXTURE_2D, 0, GL.RGBA, TEXTURE_WIDTH, TEXTURE_HEIGHT, 0, GL.RGBA, GL.UNSIGNED_BYTE, hl.Bytes.fromBytes(pixelsData));
-        */
-
         GL.activeTexture(GL.TEXTURE0);
         final dataTexture = GL.createTexture(); 
 		GL.bindTexture(GL.TEXTURE_2D, dataTexture);
 
-        //GL.texParameteri(GL.TEXTURE_2D, GL.TEXTURE_MIN_FILTER, GL.LINEAR_MIPMAP_LINEAR);
-        //GL.texParameterf(GL.TEXTURE_2D, GL.TEXTURE_MAX_ANISOTROPY_EXT, 8);
-		
-        //GL.texParameteri(GL.TEXTURE_2D, GL.TEXTURE_MIN_FILTER, GL.LINEAR); 
         GL.texParameteri(GL.TEXTURE_2D, GL.TEXTURE_MIN_FILTER, GL.NEAREST);
         GL.texParameteri(GL.TEXTURE_2D, GL.TEXTURE_MAG_FILTER, GL.NEAREST);
 
         GL.texParameteri(GL.TEXTURE_2D, GL.TEXTURE_WRAP_S, GL.CLAMP_TO_EDGE);
         GL.texParameteri(GL.TEXTURE_2D, GL.TEXTURE_WRAP_T, GL.CLAMP_TO_EDGE);
 
-        //GL.enable(GL.BLEND);
-		//GL.blendFunc(GL.SRC_ALPHA, GL.ONE_MINUS_SRC_ALPHA);
-        //GL.blendFunc(GL.ONE, GL.ONE); 
-        //GL.activeTexture(GL.TEXTURE0);
-
-        final vertecies = Float32Array.fromArray([
+        final vertices = Float32Array.fromArray([
             -1,  1, 0.0, 0.0, 1.0,   // pos(x,y,z), uv(u,v)
             -1, -1, 0.0, 0.0, 0.0,
             1,  1, 0.0, 1.0, 1.0,
             1, -1, 0.0, 1.0, 0.0
         ]).getData(); 
 
-        /* final vertices = Float32Array.fromArray([
-            // x,  y,  z,   r, g, b, a
-            -1,  1, 0.0,   1.0, 0.0, 0.0, 1.0, // красный
-            -1, -1, 0.0,   0.0, 1.0, 0.0, 1.0, // зелёный
-            1,  1, 0.0,   0.0, 0.0, 1.0, 1.0, // синий
-            1, -1, 0.0,   1.0, 1.0, 0.0, 1.0  // жёлтый
-        ]).getData(); */
-
 		final vbo = GL.createBuffer();
 		GL.bindBuffer(GL.ARRAY_BUFFER, vbo);
-		GL.bufferData(GL.ARRAY_BUFFER, vertecies.byteLength, hl.Bytes.fromBytes(vertecies.bytes), GL.STATIC_DRAW);
+		GL.bufferData(GL.ARRAY_BUFFER, vertices.byteLength, hl.Bytes.fromBytes(vertices.bytes), GL.STATIC_DRAW);
 
 		final vao = GL.createVertexArray();
 		GL.bindVertexArray(vao);
@@ -455,18 +471,33 @@ class Engine {
 		GL.enableVertexAttribArray(posAttrib);
 		GL.enableVertexAttribArray(texAttrib);
         GL.vertexAttribPointer(posAttrib, 3, GL.FLOAT, false, 20, 0);   // x,y,z
-        GL.vertexAttribPointer(texAttrib, 2, GL.FLOAT, false, 20, 12);  // uv
+        GL.vertexAttribPointer(texAttrib, 2, GL.FLOAT, false, 20, 12);  // uv 
 
-        /* GL.useProgram(shaderRender); //just for displaying texture
-        GL.clear(GL.COLOR_BUFFER_BIT);
-		GL.drawArrays(GL.TRIANGLE_STRIP, 0, 4); */
+
+        /* vbo = GL.createBuffer();
+        GL.bindBuffer(GL.ARRAY_BUFFER, vbo);
+
+        // пока пустой буфер
+        GL.bufferData(GL.ARRAY_BUFFER, 0, null, GL.DYNAMIC_DRAW);
+
+        vao = GL.createVertexArray();
+        GL.bindVertexArray(vao);
+
+        final posAttrib = GL.getAttribLocation(shaderRender, 'inPos');
+        final colAttrib = GL.getAttribLocation(shaderRender, 'inColor');
+
+        GL.enableVertexAttribArray(posAttrib);
+        GL.vertexAttribPointer(posAttrib, 3, GL.FLOAT, false, 24, 0);
+
+        GL.enableVertexAttribArray(colAttrib);
+        GL.vertexAttribPointer(colAttrib, 3, GL.FLOAT, false, 24, 12); */
     }
 
     private static inline function shaderUpdateTexelSize() {
         var texelSizeLoc = GL.getUniformLocation(shaderRender, "uTexelSize");
         var b = new hl.Bytes(4*4);
-        b.setF32(0, 1 / n);
-        b.setF32(4, 1 / n2);
+        b.setF32(0, 1 / n / 2);
+        b.setF32(4, 1 / n2 / 2);
         b.setF32(8, 0);
         b.setF32(12, 0);
         GL.uniform4fv(texelSizeLoc, b, 0, 1);
@@ -479,37 +510,44 @@ class Engine {
         GL.dispatchCompute(n, n, 1);
         GL.memoryBarrier(GL.SHADER_STORAGE_BARRIER_BIT); */
 
-        //reading data
+        
+        
+     
         GL.activeTexture(GL.TEXTURE0);
         GL.getBufferSubData(GL.SHADER_STORAGE_BUFFER, 0, data, 0, count);
         GL.texImage2D(GL.TEXTURE_2D, 0, GL.RGBA, n, n2, 0, GL.RGBA, GL.UNSIGNED_BYTE, data);
 
         GL.useProgram(shaderRender);
         shaderUpdateTexelSize();
-
-        //final texLoc = GL.getUniformLocation(shaderRender, "uColorMap");
-        //if (texLoc == null) Sys.println("Uniform uColorMap not found!!!");
-        //GL.uniform1i(texLoc, 1); 
-
         GL.clear(GL.COLOR_BUFFER_BIT);
-        GL.drawArrays(GL.TRIANGLE_STRIP, 0, 4); //GL.drawArrays(GL.GL_POINTS, 0, count);
+        GL.drawArrays(GL.TRIANGLE_STRIP, 0, 4); //GL.drawArrays(GL.GL_POINTS, 0, count); 
+
+        /* var b = new hl.Bytes(vertices.length * 4);
+        for (i in 0...vertices.length)
+            b.setF32(i * 4, vertices[i]);
+
+        GL.bindBuffer(GL.ARRAY_BUFFER, vbo);
+        GL.bufferData(GL.ARRAY_BUFFER, vertices.length * 4, b, GL.DYNAMIC_DRAW);
+
+        GL.useProgram(shaderRender);
+        GL.clear(GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT);
+
+        GL.bindVertexArray(vao);
+
+        // количество вершин = vertices.length / 3
+        GL.drawArrays(GL.TRIANGLES, 0, Std.int(vertices.length / 6)); */
     }
 
-    public static inline function drawVector(x:Float = 0.0, y:Float = 0.0, z:Float = 0.0, color:Int = 0xFF79786B) {
+    public static inline function drawDot(x:Float = 0.0, y:Float = 0.0, z:Float = 0.0, color:Int = 0xFF79786B) {
         if (x < 1 || y < 1 || x > n - 1|| y > n2 - 1) return;
 
         var xi = cast x;
         var yi = cast y;
-        data.setI32((yi * n + xi) << 2, color);
-
-        /* data.setI32(((yi+1) * n + xi) << 2, color);
-        data.setI32(((yi-1) * n + xi) << 2, color);
-        data.setI32((yi * n + (xi+1)) << 2, color);
-        data.setI32((yi * n + (xi-1)) << 2, color); */
-    }
+        data.setI32((yi * n + xi) << 2, color); 
+    } 
 
     public static inline function drawPixel(x:Float, y:Float) {
-        drawVector(x, y);
+        drawDot(x, y);
     }
 
     private static function debug() {
@@ -518,5 +556,42 @@ class Engine {
             s = s + ' ' + data.getF32(i*4);
         }
         Sys.println(s + "\n");
+    }
+
+    public static inline function v(x:Float, y:Float, z:Float, r:Float, g:Float, b:Float) {
+        vertices.push(x);
+        vertices.push(y);
+        vertices.push(z);
+        vertices.push(r);
+        vertices.push(g);
+        vertices.push(b);
+    }
+
+    public static inline function unpackColor(color:Int) {
+        var r = ((color >> 16) & 0xFF) / 255.0;
+        var g = ((color >> 8) & 0xFF) / 255.0;
+        var b = (color & 0xFF) / 255.0;
+        return { r:r, g:g, b:b };
+    }
+
+    public static inline function drawDotV(x:Float = 0.0, y:Float = 0.0, z:Float = -2.0, color:Int = 0xFF79786B) {
+        var nx = (x / n) * 2.0 - 1.0;
+        //var ny = 1.0 - (y / n2) * 2.0;
+        var ny = (y / n2) * 2.0 - 1.0;
+
+        var sx = 2.0 / n;
+        var sy = 2.0 / n2;
+
+        var hx = sx * 0.5;
+        var hy = sy * 0.5;
+
+        var c = unpackColor(color);
+
+        v(nx-hx, ny+hy, 0, c.r, c.g, c.b);
+        v(nx-hx, ny-hy, 0, c.r, c.g, c.b);
+        v(nx+hx, ny-hy, 0, c.r, c.g, c.b);
+        v(nx-hx, ny+hy, 0, c.r, c.g, c.b);
+        v(nx+hx, ny-hy, 0, c.r, c.g, c.b);
+        v(nx+hx, ny+hy, 0, c.r, c.g, c.b);
     }
 }
