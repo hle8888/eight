@@ -3,6 +3,3 @@ OpenGL 2d fullsquad shader engine, will convert it into 3d in future i suppose, 
 Example of game i'm making on it https://www.patreon.com/c/plwe2
 
 Any questions https://discord.gg/hvDg52u3WU
-
-Example
-![alt text](https://raw.githubusercontent.com/rtttr14/eight/refs/heads/master/fractal.png "")
