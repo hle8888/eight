@@ -303,6 +303,9 @@ class Eight {
     public static var fps:Float = 0.0;
     public static var objectsData:hl.Bytes;
     public static var objSize:Int;
+
+    public static var gridW = 256;
+    public static var gridH = 256;
     public function runMainLoop() {
         var first = true;
         while(Sdl.processEvents(onEvent) && run) {
@@ -314,7 +317,7 @@ class Eight {
             //var i:Int = -1; while(++i < objects.length) objects[i].draw(); 
 
             if (first) {
-                var stride = 4 * 4; // 4 float
+                /* var stride = 4 * 4; // 4 float
                 var count = objects.length;
                 var bytes = new hl.Bytes(count * stride);
                 for (i in 0...count) {
@@ -325,12 +328,32 @@ class Eight {
                     bytes.setF32(base + 4, o.pos.y);
                     bytes.setF32(base + 8, o.sizeX * 0.5); // радиус
                     bytes.setF32(base + 12, 0.4); // как float
-                } 
+                } */
+
+                var voxelCount = gridW * gridH;
+                var bytes = new hl.Bytes(voxelCount * 4);
+
+                for (y in 0...gridH) {
+                    for (x in 0...gridW) {
+                        var i = y * gridW + x;
+
+                        var color = 0x000000;
+
+                        // пример: круг в центре
+                        var dx = x - gridW/2;
+                        var dy = y - gridH/2;
+
+                        if (dx*dx + dy*dy < 40 * 40)
+                            color = 0xFF0000;
+
+                        bytes.setI32(i * 4, color);
+                    }
+                }
 
                 // upload
                 GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.ssbo);
-                GL.bufferData(GL.SHADER_STORAGE_BUFFER, count * stride, bytes, GL.DYNAMIC_DRAW);
-                GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 0, Engine.ssbo);
+                GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, bytes, GL.DYNAMIC_DRAW);
+                GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 0, Engine.ssbo); 
 
                 first = false;
             }
@@ -494,25 +517,20 @@ class Engine {
         uniform sampler2D uColorMap;  // TEXTURE1
         //uniform vec4 resolution;
         //uniform vec4 camera;
-        uniform vec4 uTexelSize;
+        //uniform vec4 uTexelSize;
         out vec4 color;               // выходной цвет
 
-        layout(std430, binding = 0) buffer Objects {
-            vec4 objs[]; 
-            // x,y,r,color
-        };
+        layout(std430, binding = 0) buffer Voxels { int voxels[]; }; // layout(std430, binding = 0) buffer Objects { vec4 objs[]; // x,y,r,color };
 
-        float intersectCircle(vec2 ro, vec2 rd, vec3 c) {
-            vec2 oc = ro - c.xy;
-            float b = dot(oc, rd);
-            float c2 = dot(oc, oc) - c.z * c.z;
-            float h = b*b - c2;
-            if (h < 0.0) return -1.0;
-            return -b - sqrt(h);
+        vec3 unpackColor(int c) {
+            float r = float((c >> 16) & 255) / 255.0;
+            float g = float((c >> 8) & 255) / 255.0;
+            float b = float(c & 255) / 255.0;
+            return vec3(r,g,b);
         }
 
         void main() {
-            vec4 center = texture(uColorMap, uv);
+            /* vec4 center = texture(uColorMap, uv);
             vec4 up    = texture(uColorMap, uv + vec2(0.0, uTexelSize.y));
             vec4 down  = texture(uColorMap, uv + vec2(0.0, -uTexelSize.y));
             vec4 left  = texture(uColorMap, uv + vec2(-uTexelSize.x, 0.0));
@@ -520,29 +538,38 @@ class Engine {
             //color = max(max(center, up), max(max(down, left), right)); 
 
             vec4 c = max(max(center, up), max(max(down, left), right));
-            if (c.rgb == vec3(0.0))
-                discard;
-            color = c;
+            //if (c.rgb == vec3(0.0))
+                //discard;
+            color = c; */
 
-           
-            vec2 p = uv * 2.0 - 1.0;
+            color = vec4(0.0, 0.0, 0.0, 1.0);
+            
             vec2 res = vec2(888, 500);
             vec2 cam = vec2(0, 0);
+            vec2 grid = vec2(256, 256);
 
-            p.x *= res.x / res.y;
+            vec2 pv = uv * 2.0 - 1.0;
+            // aspect fix
+            pv.x *= res.x / res.y;
 
-            vec2 ro = cam;
-            vec2 rd = normalize(p);
+            // обратно в [0..1]
+            vec2 uvFixed = (pv + 1.0) * 0.5;
 
-            for (int i = 0; i < 200; i++) {
-                vec4 o = objs[i];
+            ivec2 p = ivec2(floor(uvFixed * grid));
+            // === bounds check ===
+            if (p.x < 0 || p.y < 0 || p.x >= int(grid.x) || p.y >= int(grid.y)) {
+                color = vec4(0.0);
+                return;
+            }
 
-                float t = intersectCircle(ro, rd, vec3(o.x, o.y, o.z));
+            int idx = p.y * int(grid.x) + p.x;
+            int v = voxels[idx];
 
-                if (t > 0.0) {
-                    color = vec4(1.0, 0.0, 0.0, 1.0);
-                }
-            } 
+            if (v == 0) {
+                color = vec4(0.0);
+            } else {
+                color = vec4(unpackColor(v), 1.0);
+            }
         }
     ";
     /* static var fragSrcQuad = "#version 430
@@ -583,7 +610,8 @@ class Engine {
             p.x *= res.x / res.y;
 
             vec2 ro = cam;
-            vec2 rd = normalize(p);
+            //vec2 rd = normalize(p);
+            vec2 rd = normalize((cam + p) - ro);
 
             float tMin = 1e9;
             vec3 col = vec3(0.0);
@@ -863,7 +891,7 @@ class Engine {
         GL.useProgram(shaderRender);
         //GL.uniform4fv(GL.getUniformLocation(shaderRender, "resolution"), res, 0, 1);
         //GL.uniform4fv(GL.getUniformLocation(shaderRender, "camera"), cam, 0, 1);
-        shaderUpdateTexelSize();
+        //shaderUpdateTexelSize();
         //GL.clear(GL.COLOR_BUFFER_BIT);
         GL.drawArrays(GL.TRIANGLE_STRIP, 0, 4); //GL.drawArrays(GL.GL_POINTS, 0, count);
     }
