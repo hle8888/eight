@@ -344,7 +344,26 @@ class Eight {
                         bytes.setI32(i * 4, 0xFF0000);
                     else
                         bytes.setI32(i * 4, 0x000000);
-                }
+                } 
+
+                /* var voxelCount = gridW * gridH;
+                var bytes = new hl.Bytes(voxelCount * 4);
+                for (y in 0...gridH) {
+                    for (x in 0...gridW) {
+                        var i = y * gridW + x;
+
+                        var color = 0x000000;
+
+                        // пример: круг в центре
+                        var dx = x - gridW/2;
+                        var dy = y - gridH/2;
+
+                        if (dx*dx + dy*dy < 40 * 40)
+                            color = 0xFF0000;
+
+                        bytes.setI32(i * 4, color);
+                    }
+                } */
 
                 // upload
                 GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.ssbo);
@@ -542,58 +561,41 @@ class Engine {
                 //discard;
             color = c; */
 
-
             vec2 res = vec2(888, 500);
             ivec3 grid = ivec3(256, 256, 128); // 3D!!!
-
             // === экран → луч ===
             vec2 p = uv * 2.0 - 1.0;
             p.x *= res.x / res.y;
-
             vec3 ro = vec3(128, 128, 0); // по центру сцены
-
             vec3 target = vec3(128,128,1); // центр voxel
             vec3 forward = normalize(target - ro);
-
             vec3 upBase = vec3(0, 1, 0);
             if (abs(dot(forward, upBase)) > 0.99)
                 upBase = vec3(1, 0, 0);
-
             vec3 right = normalize(cross(forward, upBase));
             vec3 up = cross(right, forward);
-
-            // FOV
             float fov = 1.0;
-
             vec3 rd = normalize(forward + p.x * right * fov + p.y * up * fov);
-
             // === voxel координаты ===
             vec3 pos = ro;
             ivec3 ipos = ivec3(floor(pos));
-
             vec3 deltaDist = abs(1.0 / rd);
             ivec3 step = ivec3(sign(rd));
-
             vec3 sideDist = (sign(rd) * (vec3(ipos) - pos) + (sign(rd)*0.5) + 0.5) * deltaDist;
-
             vec3 hitColor = vec3(0.0);
             bool hit = false;
-
             for (int i = 0; i < 128; i++) {
                 // === bounds check ===
                 if (ipos.x < 0 || ipos.y < 0 || ipos.z < 0 ||
                     ipos.x >= grid.x || ipos.y >= grid.y || ipos.z >= grid.z)
                     break;
-
                 int idx = getIndex(ipos, grid);
                 int v = voxels[idx];
-
                 if (v != 0) {
                     hitColor = unpackColor(v);
                     hit = true;
                     break;
                 }
-
                 // === шаг DDA ===
                 if (sideDist.x < sideDist.y) {
                     if (sideDist.x < sideDist.z) {
@@ -613,15 +615,14 @@ class Engine {
                     }
                 }
             }
-
             if (hit) {
                 color = vec4(hitColor, 1.0);
             } else {
                 color = vec4(0.0);
-            }
+            } 
 
 
-            /** vec2 res = vec2(888, 500);
+            /* vec2 res = vec2(888, 500);
             vec2 cam = vec2(0, 0);
             vec2 grid = vec2(256, 256);
             vec2 pv = uv * 2.0 - 1.0;
@@ -640,7 +641,7 @@ class Engine {
                 color = vec4(0.0);
             } else {
                 color = vec4(unpackColor(v), 1.0);
-            } **/
+            } */
         }
     ";
     /* static var fragSrcQuad = "#version 430
