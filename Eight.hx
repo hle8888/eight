@@ -304,6 +304,7 @@ class Eight {
     public static var objectsData:hl.Bytes;
     public static var objSize:Int;
 
+    public static var target = new Vec3(128, 128, 64);
     public function runMainLoop() {
         var first = true;
         while(Sdl.processEvents(onEvent) && run) {
@@ -313,7 +314,7 @@ class Eight {
 
             //Engine.vertices = [];
             //var i:Int = -1; while(++i < objects.length) objects[i].draw(); 
-
+            target[2] += 1 * dt;
             if (first) {
                 /* var stride = 4 * 4; // 4 float
                 var count = objects.length;
@@ -549,19 +550,21 @@ class Engine {
         //uniform vec4 resolution;
         //uniform vec4 camera;
         //uniform vec4 uTexelSize;
+        uniform vec4 camPos;
+        uniform vec4 camForward;
+        uniform vec4 camRight;
+        uniform vec4 camUp;
+
         out vec4 color;               // выходной цвет
 
         layout(std430, binding = 0) buffer Voxels { int voxels[]; }; // layout(std430, binding = 0) buffer Objects { vec4 objs[]; // x,y,r,color };
 
         vec3 unpackColor(int c) {
-            float r = float((c >> 16) & 255) / 255.0;
-            float g = float((c >> 8) & 255) / 255.0;
-            float b = float(c & 255) / 255.0;
-            return vec3(r,g,b);
-        }
-
-        int getIndex(ivec3 p, ivec3 grid) {
-            return p.z * grid.x * grid.y + p.y * grid.x + p.x;
+            return vec3(
+                (c >> 16) & 255,
+                (c >> 8) & 255,
+                c & 255
+            ) * (1.0 / 255.0);
         }
 
         void main() {
@@ -582,60 +585,48 @@ class Engine {
             // === экран → луч ===
             vec2 p = uv * 2.0 - 1.0;
             p.x *= res.x / res.y;
-            vec3 ro = vec3(64, 128, 100); // по центру сцены
-            vec3 target = vec3(128,128, 64); // центр voxel
-            vec3 forward = normalize(target - ro);
+
+            vec3 ro = camPos.xyz; //vec3 ro = vec3(100, 100, 100); // по центру сцены
+            //vec3 target = vec3(128,128, 64); // центр voxel            
+            vec3 forward = camForward.xyz; //vec3 forward = normalize(target - ro);            
             vec3 upBase = vec3(0, 1, 0);
-            if (abs(dot(forward, upBase)) > 0.99)
-                upBase = vec3(1, 0, 0);
-            vec3 right = normalize(cross(forward, upBase));
-            vec3 up = cross(right, forward);
+            //if (abs(dot(forward, upBase)) > 0.99) upBase = vec3(1, 0, 0);
+            vec3 right = camRight.xyz; //vec3 right = normalize(cross(forward, upBase));
+            vec3 up = camUp.xyz; //vec3 up = cross(right, forward);
+
             float fov = 1.0;
             vec3 rd = normalize(forward + p.x * right * fov + p.y * up * fov);
             // === voxel координаты ===
             vec3 pos = ro;
             ivec3 ipos = ivec3(floor(pos));
-            vec3 deltaDist = abs(1.0 / rd);
-            ivec3 step = ivec3(sign(rd));
-            vec3 sideDist = (sign(rd) * (vec3(ipos) - pos) + (sign(rd)*0.5) + 0.5) * deltaDist;
+            vec3 invRd = 1.0 / rd;
+            vec3 deltaDist = abs(invRd);
+            vec3 srd = sign(rd);
+            ivec3 step = ivec3(srd);
+            vec3 sideDist = (srd * (vec3(ipos) - pos) + (srd * 0.5) + 0.5) * deltaDist;
             vec3 hitColor = vec3(0.0);
             bool hit = false;
             for (int i = 0; i < 128; i++) {
-                // === bounds check ===
-                if (ipos.x < 0 || ipos.y < 0 || ipos.z < 0 ||
-                    ipos.x >= grid.x || ipos.y >= grid.y || ipos.z >= grid.z)
+
+                if (any(lessThan(ipos, ivec3(0))) || any(greaterThanEqual(ipos, grid)))
                     break;
-                int idx = getIndex(ipos, grid);
+
+                int idx = ipos.z * grid.x * grid.y + ipos.y * grid.x + ipos.x;
                 int v = voxels[idx];
+
                 if (v != 0) {
-                    hitColor = unpackColor(v);
-                    hit = true;
-                    break;
+                    color = vec4(unpackColor(v), 1.0);
+                    return;
                 }
-                // === шаг DDA ===
-                if (sideDist.x < sideDist.y) {
-                    if (sideDist.x < sideDist.z) {
-                        sideDist.x += deltaDist.x;
-                        ipos.x += step.x;
-                    } else {
-                        sideDist.z += deltaDist.z;
-                        ipos.z += step.z;
-                    }
-                } else {
-                    if (sideDist.y < sideDist.z) {
-                        sideDist.y += deltaDist.y;
-                        ipos.y += step.y;
-                    } else {
-                        sideDist.z += deltaDist.z;
-                        ipos.z += step.z;
-                    }
-                }
+
+                bvec3 mask = lessThanEqual(sideDist, min(sideDist.yzx, sideDist.zxy));
+                vec3 m = vec3(mask);
+
+                sideDist += m * deltaDist;
+                ipos += ivec3(m) * step;
             }
-            if (hit) {
-                color = vec4(hitColor, 1.0);
-            } else {
-                color = vec4(0.0);
-            } 
+
+            color = vec4(0.0);
 
 
             /* vec2 res = vec2(888, 500);
@@ -976,7 +967,25 @@ class Engine {
         GL.activeTexture(GL.TEXTURE0);
         GL.getBufferSubData(GL.SHADER_STORAGE_BUFFER, 0, data, 0, count);
         GL.texImage2D(GL.TEXTURE_2D, 0, GL.RGBA, n, n2, 0, GL.RGBA, GL.UNSIGNED_BYTE, data);
-        GL.useProgram(shaderRender);
+        GL.useProgram(shaderRender);        
+        var b = new hl.Bytes(4*4); b.setF32(0, 100); b.setF32(4, 100); b.setF32(8, 100); b.setF32(12, 0.0); 
+        GL.uniform4fv(GL.getUniformLocation(shaderRender, "camPos"), b, 0, 1);
+
+        var ro = new Vec3(100, 100, 100);
+        var target = Eight.target; //var target = new Vec3(128, 128, 64);
+        var forward = target.sub(ro).normalize();
+        b = new hl.Bytes(4*4); b.setF32(0, forward[0]); b.setF32(4, forward[1]); b.setF32(8, forward[2]); b.setF32(12, 0.0); 
+        GL.uniform4fv(GL.getUniformLocation(shaderRender, "camForward"), b, 0, 1);
+
+        var upBase = new Vec3(0, 1, 0);
+        var right = forward.cross(upBase).normalize();
+        b = new hl.Bytes(4*4); b.setF32(0, right[0]); b.setF32(4, right[1]); b.setF32(8, right[2]); b.setF32(12, 0.0); 
+        GL.uniform4fv(GL.getUniformLocation(shaderRender, "camRight"), b, 0, 1);
+        var up = right.cross(forward);
+        b = new hl.Bytes(4*4); b.setF32(0, up[0]); b.setF32(4, up[1]); b.setF32(8, up[2]); b.setF32(12, 0.0); 
+        GL.uniform4fv(GL.getUniformLocation(shaderRender, "camUp"), b, 0, 1);
+        
+
         //GL.uniform4fv(GL.getUniformLocation(shaderRender, "resolution"), res, 0, 1);
         //GL.uniform4fv(GL.getUniformLocation(shaderRender, "camera"), cam, 0, 1);
         //shaderUpdateTexelSize();
