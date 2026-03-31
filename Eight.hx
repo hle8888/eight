@@ -303,33 +303,56 @@ class Eight {
     public static var fps:Float = 0.0;
     public static var objectsData:hl.Bytes;
     public static var objSize:Int;
+
     public function runMainLoop() {
+        var first = true;
         while(Sdl.processEvents(onEvent) && run) {
             var now = haxe.Timer.stamp();
             var dt = now - lastTime;
             lastTime = now;
 
-            /** Engine.vertices = [];
-            var i:Int = -1; while(++i < objects.length) objects[i].draw(); **/
+            //Engine.vertices = [];
+            //var i:Int = -1; while(++i < objects.length) objects[i].draw(); 
 
-            /* var stride = 4 * 4; // 4 float
-            var count = objects.length;
-            var bytes = new hl.Bytes(count * stride);
-            for (i in 0...count) {
-                var o = objects[i];
-                var base = i * stride;
+            if (first) {
+                /* var stride = 4 * 4; // 4 float
+                var count = objects.length;
+                var bytes = new hl.Bytes(count * stride);
+                for (i in 0...count) {
+                    var o = objects[i];
+                    var base = i * stride;
 
-                bytes.setF32(base + 0, o.pos.x);
-                bytes.setF32(base + 4, o.pos.y);
-                bytes.setF32(base + 8, o.sizeX * 0.5); // радиус
-                bytes.setF32(base + 12, 0.4); // как float
-            } */
+                    bytes.setF32(base + 0, o.pos.x);
+                    bytes.setF32(base + 4, o.pos.y);
+                    bytes.setF32(base + 8, o.sizeX * 0.5); // радиус
+                    bytes.setF32(base + 12, 0.4); // как float
+                } */
 
-            // upload
-            //GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.ssbo);
-            //GL.bufferData(GL.SHADER_STORAGE_BUFFER, count * stride, bytes, GL.DYNAMIC_DRAW);
-            //GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 0, Engine.ssbo);
-            
+                var gridW = 256; var gridH = 256; var gridD = 128;
+                var voxelCount = gridW * gridH * gridD;
+                var bytes = new hl.Bytes(voxelCount * 4);
+                for (z in 0...gridD)
+                for (y in 0...gridH)
+                for (x in 0...gridW) {
+                    var i = z * gridW * gridH + y * gridW + x;
+
+                    var dx = x - gridW/2;
+                    var dy = y - gridH/2;
+                    var dz = z - gridD/2;
+
+                    if (dx*dx + dy*dy + dz*dz < 30 * 30)
+                        bytes.setI32(i * 4, 0xFF0000);
+                    else
+                        bytes.setI32(i * 4, 0x000000);
+                }
+
+                // upload
+                GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.ssbo);
+                GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, bytes, GL.DYNAMIC_DRAW);
+                GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 0, Engine.ssbo); 
+
+                first = false;
+            }
             
             update(dt); for(updateCb in updateCallbacks) updateCb(dt);
 
@@ -414,7 +437,7 @@ class Eight {
 }
 
 class Engine {
-    public static var zoom:Float = 0.8;
+    public static var zoom:Float = 1;
     public static var cameraOffset = new Vec3(0, 0, 0);
 
     public static var fullQuad = true;
@@ -488,10 +511,26 @@ class Engine {
         in vec2 uv;                   // получаем UV
         uniform sampler2D uTexture;   // текстура
         uniform sampler2D uColorMap;  // TEXTURE1
-        uniform vec4 uTexelSize;
+        //uniform vec4 resolution;
+        //uniform vec4 camera;
+        //uniform vec4 uTexelSize;
         out vec4 color;               // выходной цвет
+
+        layout(std430, binding = 0) buffer Voxels { int voxels[]; }; // layout(std430, binding = 0) buffer Objects { vec4 objs[]; // x,y,r,color };
+
+        vec3 unpackColor(int c) {
+            float r = float((c >> 16) & 255) / 255.0;
+            float g = float((c >> 8) & 255) / 255.0;
+            float b = float(c & 255) / 255.0;
+            return vec3(r,g,b);
+        }
+
+        int getIndex(ivec3 p, ivec3 grid) {
+            return p.z * grid.x * grid.y + p.y * grid.x + p.x;
+        }
+
         void main() {
-            vec4 center = texture(uColorMap, uv);
+            /* vec4 center = texture(uColorMap, uv);
             vec4 up    = texture(uColorMap, uv + vec2(0.0, uTexelSize.y));
             vec4 down  = texture(uColorMap, uv + vec2(0.0, -uTexelSize.y));
             vec4 left  = texture(uColorMap, uv + vec2(-uTexelSize.x, 0.0));
@@ -499,9 +538,109 @@ class Engine {
             //color = max(max(center, up), max(max(down, left), right)); 
 
             vec4 c = max(max(center, up), max(max(down, left), right));
-            if (c.rgb == vec3(0.0))
-                discard;
-            color = c;
+            //if (c.rgb == vec3(0.0))
+                //discard;
+            color = c; */
+
+
+            vec2 res = vec2(888, 500);
+            ivec3 grid = ivec3(256, 256, 128); // 3D!!!
+
+            // === экран → луч ===
+            vec2 p = uv * 2.0 - 1.0;
+            p.x *= res.x / res.y;
+
+            vec3 ro = vec3(128, 128, 0); // по центру сцены
+
+            vec3 target = vec3(128,128,1); // центр voxel
+            vec3 forward = normalize(target - ro);
+
+            vec3 upBase = vec3(0, 1, 0);
+            if (abs(dot(forward, upBase)) > 0.99)
+                upBase = vec3(1, 0, 0);
+
+            vec3 right = normalize(cross(forward, upBase));
+            vec3 up = cross(right, forward);
+
+            // FOV
+            float fov = 1.0;
+
+            vec3 rd = normalize(forward + p.x * right * fov + p.y * up * fov);
+
+            // === voxel координаты ===
+            vec3 pos = ro;
+            ivec3 ipos = ivec3(floor(pos));
+
+            vec3 deltaDist = abs(1.0 / rd);
+            ivec3 step = ivec3(sign(rd));
+
+            vec3 sideDist = (sign(rd) * (vec3(ipos) - pos) + (sign(rd)*0.5) + 0.5) * deltaDist;
+
+            vec3 hitColor = vec3(0.0);
+            bool hit = false;
+
+            for (int i = 0; i < 128; i++) {
+                // === bounds check ===
+                if (ipos.x < 0 || ipos.y < 0 || ipos.z < 0 ||
+                    ipos.x >= grid.x || ipos.y >= grid.y || ipos.z >= grid.z)
+                    break;
+
+                int idx = getIndex(ipos, grid);
+                int v = voxels[idx];
+
+                if (v != 0) {
+                    hitColor = unpackColor(v);
+                    hit = true;
+                    break;
+                }
+
+                // === шаг DDA ===
+                if (sideDist.x < sideDist.y) {
+                    if (sideDist.x < sideDist.z) {
+                        sideDist.x += deltaDist.x;
+                        ipos.x += step.x;
+                    } else {
+                        sideDist.z += deltaDist.z;
+                        ipos.z += step.z;
+                    }
+                } else {
+                    if (sideDist.y < sideDist.z) {
+                        sideDist.y += deltaDist.y;
+                        ipos.y += step.y;
+                    } else {
+                        sideDist.z += deltaDist.z;
+                        ipos.z += step.z;
+                    }
+                }
+            }
+
+            if (hit) {
+                color = vec4(hitColor, 1.0);
+            } else {
+                color = vec4(0.0);
+            }
+
+
+            /** vec2 res = vec2(888, 500);
+            vec2 cam = vec2(0, 0);
+            vec2 grid = vec2(256, 256);
+            vec2 pv = uv * 2.0 - 1.0;
+            pv.x *= res.x / res.y;
+            // обратно в [0..1]
+            vec2 uvFixed = (pv + 1.0) * 0.5;
+            ivec2 p = ivec2(floor(uvFixed * grid));
+            // === bounds check ===
+            if (p.x < 0 || p.y < 0 || p.x >= int(grid.x) || p.y >= int(grid.y)) {
+                color = vec4(0.0);
+                return;
+            }
+            int idx = p.y * int(grid.x) + p.x;
+            int v = voxels[idx];
+            if (v == 0) {
+                color = vec4(0.0);
+            } else {
+                color = vec4(unpackColor(v), 1.0);
+            } **/
         }
     ";
     /* static var fragSrcQuad = "#version 430
@@ -542,7 +681,8 @@ class Engine {
             p.x *= res.x / res.y;
 
             vec2 ro = cam;
-            vec2 rd = normalize(p);
+            //vec2 rd = normalize(p);
+            vec2 rd = normalize((cam + p) - ro);
 
             float tMin = 1e9;
             vec3 col = vec3(0.0);
@@ -791,26 +931,26 @@ class Engine {
         GL.bindVertexArray(vao);
         GL.drawArrays(GL.TRIANGLE_STRIP, 0, 4); */
 
-        /** GL.useProgram(shaderRender);
-        GL.uniform1i(GL.getUniformLocation(shaderRender, "objCount"), Eight.objects.length);
+        //GL.useProgram(shaderRender);
+        //GL.uniform1i(GL.getUniformLocation(shaderRender, "objCount"), Eight.objects.length);
         
-        var res = new hl.Bytes(16); // 4 float
+        var res = new hl.Bytes(4*4); // 4 float
         res.setF32(0, n);
         res.setF32(4, n2);
         res.setF32(8, 0);
         res.setF32(12, 0);
 
-        GL.uniform4fv(GL.getUniformLocation(shaderRender, "resolution"), res, 0, 1);
+        
 
-        var cam = new hl.Bytes(16);
+        var cam = new hl.Bytes(4*4);
         cam.setF32(0, cameraOffset.x);
         cam.setF32(4, cameraOffset.y);
         cam.setF32(8, 0);
         cam.setF32(12, 0);
 
-        GL.uniform4fv(GL.getUniformLocation(shaderRender, "camera"), cam, 0, 1);
+        
 
-        GL.useProgram(shaderRender);
+        /** GL.useProgram(shaderRender);
         GL.bindVertexArray(vao);
         GL.drawArrays(GL.TRIANGLE_STRIP, 0, 4);  **/
 
@@ -820,7 +960,9 @@ class Engine {
         GL.getBufferSubData(GL.SHADER_STORAGE_BUFFER, 0, data, 0, count);
         GL.texImage2D(GL.TEXTURE_2D, 0, GL.RGBA, n, n2, 0, GL.RGBA, GL.UNSIGNED_BYTE, data);
         GL.useProgram(shaderRender);
-        shaderUpdateTexelSize();
+        //GL.uniform4fv(GL.getUniformLocation(shaderRender, "resolution"), res, 0, 1);
+        //GL.uniform4fv(GL.getUniformLocation(shaderRender, "camera"), cam, 0, 1);
+        //shaderUpdateTexelSize();
         //GL.clear(GL.COLOR_BUFFER_BIT);
         GL.drawArrays(GL.TRIANGLE_STRIP, 0, 4); //GL.drawArrays(GL.GL_POINTS, 0, count);
     }
