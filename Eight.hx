@@ -41,6 +41,7 @@ class Object {
     }
 
     public function setVisible(visible:Bool) {
+        show = visible;
         var index:Int = Eight.objects.indexOf(this);
         if (visible && index == -1) {
             Eight.objects.push(this);
@@ -264,6 +265,13 @@ class Circle extends Object {
     }
 }
 
+class GPUObject {
+    public var x:Float;
+    public var y:Float;
+    public var r:Float;
+    public var color:Float; // упакованный цвет
+}
+
 class Eight {
     public static var objects:Array<Object> = []; //objects to draw
     public static var currentSelected:Object;
@@ -277,7 +285,6 @@ class Eight {
 
         var mode = Sdl.getCurrentDisplayMode(0);
         screenW = mode.width; screenH = mode.height; var x:Int = 0; var y:Int = 0;
-        //screenW = 888; screenH = 500; x = 4; y = 250;
         window = new sdl.Window('', screenW, screenH, x, y, sdl.Window.SDL_WINDOW_OPENGL);
         window.title = 'VoidDwellers';
 
@@ -294,15 +301,37 @@ class Eight {
     public static var lastTime = haxe.Timer.stamp();
     public static var run:Bool = true;
     public static var fps:Float = 0.0;
+    public static var objectsData:hl.Bytes;
+    public static var objSize:Int;
     public function runMainLoop() {
         while(Sdl.processEvents(onEvent) && run) {
             var now = haxe.Timer.stamp();
             var dt = now - lastTime;
             lastTime = now;
 
-            Engine.vertices = [];
-            var i:Int = -1; while(++i < objects.length) objects[i].draw(); 
-            update(dt);
+            /** Engine.vertices = [];
+            var i:Int = -1; while(++i < objects.length) objects[i].draw(); **/
+
+            /* var stride = 4 * 4; // 4 float
+            var count = objects.length;
+            var bytes = new hl.Bytes(count * stride);
+            for (i in 0...count) {
+                var o = objects[i];
+                var base = i * stride;
+
+                bytes.setF32(base + 0, o.pos.x);
+                bytes.setF32(base + 4, o.pos.y);
+                bytes.setF32(base + 8, o.sizeX * 0.5); // радиус
+                bytes.setF32(base + 12, 0.4); // как float
+            } */
+
+            // upload
+            //GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.ssbo);
+            //GL.bufferData(GL.SHADER_STORAGE_BUFFER, count * stride, bytes, GL.DYNAMIC_DRAW);
+            //GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 0, Engine.ssbo);
+            
+            
+            update(dt); for(updateCb in updateCallbacks) updateCb(dt);
 
             //Engine.drawDot(0, 0, 0); // центр экрана
             //Engine.drawCube(0, 0, 0, 0.5);  // куб в центре экрана, размер 0.5
@@ -312,14 +341,15 @@ class Eight {
             if (sleep > 0) sdl.Sdl.delay(Std.int(sleep * 1000));
             fps = 1.0 / frameTime;
 
-            Engine.computeShaders();
+            if (Engine.fullQuad) Engine.computeShaders();
+            else Engine.computeShaders0();
             window.present();
 
-            i = timerCallbacks.length; while(--i > -1) {
-                var timer = timerCallbacks[i];
+            var j = timerCallbacks.length; while(--j > -1) {
+                var timer = timerCallbacks[j];
                 if (timer.timeTrigger < lastTime) {
                     timer.callback();
-                    timerCallbacks.splice(i, 1);
+                    timerCallbacks.splice(j, 1);
 
                     trace('Timer fired: ${timer.timeTrigger}, ${timer.callback}');
                 }
@@ -345,8 +375,26 @@ class Eight {
 
     public static function unregisterEventCallback(callback:sdl.Event->Void) {
         for(i in 0...eventCallbacks.length) 
-            if (eventCallbacks[i] == callback) return eventCallbacks.splice(i, 1);
+            if (eventCallbacks[i] == callback) {
+                trace('Event callbacks: ${eventCallbacks.length - 1}');
+                return eventCallbacks.splice(i, 1);
+            }
         throw "Event callback not found!!!";
+    }
+
+    static var updateCallbacks:Array<Float->Void> = [];
+    public static function registerUpdateCallback(callback:Float->Void) {
+        updateCallbacks.push(callback);
+        trace('Update callbacks: ${updateCallbacks.length}');
+    }
+
+    public static function unregisterUpdateCallback(callback:Float->Void) {
+        for(i in 0...updateCallbacks.length) 
+            if (updateCallbacks[i] == callback) {
+                trace('Update callbacks: ${updateCallbacks.length - 1}');
+                return updateCallbacks.splice(i, 1);
+            }
+        throw "Update callback not found!!!";
     }
 
     public function onEvent(event:sdl.Event):Bool {
@@ -369,7 +417,7 @@ class Engine {
     public static var zoom:Float = 0.8;
     public static var cameraOffset = new Vec3(0, 0, 0);
 
-    static var fullscreenQuad = true;
+    public static var fullQuad = true;
 
     static var data:hl.Bytes; 
     static var result:hl.Bytes;
@@ -391,7 +439,7 @@ class Engine {
     static var shaderCompute:sdl.Program;
     static var shaderRender:sdl.Program;
     static var shaderSpace:sdl.Program;
-    static var ssbo:sdl.Buffer;    
+    public static var ssbo:sdl.Buffer;    
     public static function initShaderEngine() {
         ssbo = GL.createBuffer();
         GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, ssbo);
@@ -399,12 +447,12 @@ class Engine {
         //shaderSpace = compileShader(GL.createShader(GL.VERTEX_SHADER), vertexSrcQuad, false);
         //shaderSpace = compileShader(GL.createShader(GL.FRAGMENT_SHADER), fragSrcQuadSpace, true, shaderSpace);
 
-        //shaderCompute = compileShader(GL.createShader(GL.COMPUTE_SHADER), shaderSource);
-        shaderRender = compileShader(GL.createShader(GL.VERTEX_SHADER), fullscreenQuad ? vertexSrcQuad : vertexSrc, false);
-        shaderRender = compileShader(GL.createShader(GL.FRAGMENT_SHADER), fullscreenQuad ? fragSrcQuad : fragSrc, true, shaderRender);
+        shaderCompute = compileShader(GL.createShader(GL.COMPUTE_SHADER), shaderSource);
+        shaderRender = compileShader(GL.createShader(GL.VERTEX_SHADER), fullQuad ? vertexSrcQuad : vertexSrc, false);
+        shaderRender = compileShader(GL.createShader(GL.FRAGMENT_SHADER), fullQuad ? fragSrcQuad : fragSrc, true, shaderRender);
     }
 
-    /* static var shaderSource = "#version 430
+    static var shaderSource = "#version 430
             layout(local_size_x = 1, local_size_y = 1) in; 
             struct XYZW { float x; float y; float z; float w; }; layout(std430, binding = 0) buffer Data { XYZW values[]; };
             //layout(rgba32f, binding = 1) uniform image2D outImage;
@@ -421,7 +469,7 @@ class Engine {
 
                 //imageStore(outImage, pixel, vec4(1.0, 0.0, 0.0, 1.0)); 
             }
-    "; */
+    "; 
     //FULLSCREEN QUAD
     static var vertexSrcQuad = "#version 430
         in vec3 inPos;
@@ -455,7 +503,65 @@ class Engine {
                 discard;
             color = c;
         }
-    "; 
+    ";
+    /* static var fragSrcQuad = "#version 430
+        in vec2 uv;
+        out vec4 color;
+
+        layout(std430, binding = 0) buffer Objects {
+            vec4 objs[]; 
+            // x,y,r,color
+        }; 
+
+        uniform int objCount;
+        //uniform vec4 resolution;
+        //uniform vec4 camera;
+
+        float intersectCircle(vec2 ro, vec2 rd, vec3 c) {
+            vec2 oc = ro - c.xy;
+            float b = dot(oc, rd);
+            float c2 = dot(oc, oc) - c.z * c.z;
+            float h = b*b - c2;
+            if (h < 0.0) return -1.0;
+            return -b - sqrt(h);
+        }
+
+        vec3 unpackColor(float c) {
+            int ci = int(c);
+            float r = float((ci >> 16) & 255) / 255.0;
+            float g = float((ci >> 8) & 255) / 255.0;
+            float b = float(ci & 255) / 255.0;
+            return vec3(r,g,b);
+        } 
+
+        void main() {
+            vec2 p = uv * 2.0 - 1.0;
+            vec2 res = resolution.xy;
+            vec2 cam = camera.xy;
+
+            p.x *= res.x / res.y;
+
+            vec2 ro = cam;
+            vec2 rd = normalize(p);
+
+            float tMin = 1e9;
+            vec3 col = vec3(0.0);
+
+            for (int i = 0; i < objCount; i++) {
+                vec4 o = objs[i];
+                float t = intersectCircle(ro, rd, vec3(o.x, o.y, o.z));
+
+                if (t > 0.0 && t < tMin) {
+                    tMin = t;
+                    col = unpackColor(o.w);
+                }
+            }
+
+            color = vec4(col, 1.0); 
+
+            color = vec4(0, 0, 0, 0);
+        }"; */
+
     static var fragSrcQuadSpace = "#version 430
         in vec2 uv;
         out vec4 color;
@@ -554,7 +660,16 @@ class Engine {
     public static var vertices:Array<Float> = [];
     public static var vbo:sdl.Buffer;
     public static var vao:sdl.VertexArray;
+    static var tex:sdl.Texture;
     public static function createRenderTexture() {	
+        //COMPUTED SHADER TEXTURE
+        tex = GL.createTexture();
+        GL.bindTexture(GL.TEXTURE_2D, tex);
+        GL.texImage2D(GL.TEXTURE_2D, 0, GL.RGBA8, n, n2, 0, GL.RGBA, GL.UNSIGNED_BYTE, null);
+        GL.bindImageTexture(1, tex, 0, false, 0, GL.WRITE_ONLY, GL.RGBA8);
+
+
+
         GL.activeTexture(GL.TEXTURE0);
         final dataTexture = GL.createTexture(); 
 		GL.bindTexture(GL.TEXTURE_2D, dataTexture);
@@ -568,6 +683,11 @@ class Engine {
         //GL.enable(GL.BLEND);
 		//GL.blendFunc(GL.SRC_ALPHA, GL.ONE_MINUS_SRC_ALPHA);
 
+        if (fullQuad) defineVertices1();
+        else defineVertices0();
+    }
+
+    public static inline function defineVertices1() {
         final vertices = Float32Array.fromArray([
             -1,  1, 0.0, 0.0, 1.0,   // pos(x,y,z), uv(u,v)
             -1, -1, 0.0, 0.0, 0.0,
@@ -588,9 +708,10 @@ class Engine {
 		GL.enableVertexAttribArray(texAttrib);
         GL.vertexAttribPointer(posAttrib, 3, GL.FLOAT, false, 20, 0);   // x,y,z
         GL.vertexAttribPointer(texAttrib, 2, GL.FLOAT, false, 20, 12);  // uv 
+    }
 
-
-        /* vbo = GL.createBuffer();
+    public static inline function defineVertices0() {
+        vbo = GL.createBuffer();
         GL.bindBuffer(GL.ARRAY_BUFFER, vbo);
         GL.bufferData(GL.ARRAY_BUFFER, 0, null, GL.DYNAMIC_DRAW);
         vao = GL.createVertexArray();
@@ -600,10 +721,10 @@ class Engine {
         GL.enableVertexAttribArray(posAttrib);
         GL.vertexAttribPointer(posAttrib, 3, GL.FLOAT, false, 24, 0);
         GL.enableVertexAttribArray(colAttrib);
-        GL.vertexAttribPointer(colAttrib, 3, GL.FLOAT, false, 24, 12); */
+        GL.vertexAttribPointer(colAttrib, 3, GL.FLOAT, false, 24, 12);
     }
 
-    public static inline function computeShaders0() {
+    public static inline function computeShadersBackground() {
         GL.clear(GL.COLOR_BUFFER_BIT);
         GL.useProgram(shaderSpace);
         var timeLoc = GL.getUniformLocation(shaderRender, "uTime");
@@ -625,8 +746,8 @@ class Engine {
     private static inline function shaderUpdateTexelSize() {
         var texelSizeLoc = GL.getUniformLocation(shaderRender, "uTexelSize");
         var b = new hl.Bytes(4*4);
-        b.setF32(0, 1 / n / 2);
-        b.setF32(4, 1 / n2 / 2);
+        b.setF32(0, 1 / n / 2.3);
+        b.setF32(4, 1 / n2 / 2.3);
         b.setF32(8, 0);
         b.setF32(12, 0);
         GL.uniform4fv(texelSizeLoc, b, 0, 1);
@@ -638,17 +759,74 @@ class Engine {
         GL.useProgram(shaderCompute);
         GL.dispatchCompute(n, n, 1);
         GL.memoryBarrier(GL.SHADER_STORAGE_BARRIER_BIT); */
+        /* GL.clear(GL.COLOR_BUFFER_BIT);
+        GL.useProgram(shaderCompute);
+        GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 0, ssbo);
+        GL.uniform1i(GL.getUniformLocation(shaderCompute, "objCount"), Eight.objects.length);
+
+        var resLoc = GL.getUniformLocation(shaderCompute, "resolution");
+        var b = new hl.Bytes(16);
+        b.setF32(0, n);
+        b.setF32(4, n2);
+        b.setF32(8, 0);
+        b.setF32(12, 0);
+        GL.uniform4fv(resLoc, b, 0, 1); 
+
+        GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, ssbo);
+        GL.bufferData(GL.SHADER_STORAGE_BUFFER, Eight.objSize, Eight.objectsData, GL.DYNAMIC_DRAW);
+        GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 0, ssbo);
+
+        GL.dispatchCompute(
+            Std.int(Math.ceil(n / 8)),
+            Std.int(Math.ceil(n2 / 8)),
+            1
+        );
+        GL.memoryBarrier(GL.ALL_BARRIER_BITS);
+        GL.memoryBarrier(GL.SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+        GL.useProgram(shaderRender);
+        GL.activeTexture(GL.TEXTURE0);
+        GL.bindTexture(GL.TEXTURE_2D, tex);
+        GL.uniform1i(GL.getUniformLocation(shaderRender, "uColorMap"), 0);
+        GL.bindVertexArray(vao);
+        GL.drawArrays(GL.TRIANGLE_STRIP, 0, 4); */
+
+        /** GL.useProgram(shaderRender);
+        GL.uniform1i(GL.getUniformLocation(shaderRender, "objCount"), Eight.objects.length);
+        
+        var res = new hl.Bytes(16); // 4 float
+        res.setF32(0, n);
+        res.setF32(4, n2);
+        res.setF32(8, 0);
+        res.setF32(12, 0);
+
+        GL.uniform4fv(GL.getUniformLocation(shaderRender, "resolution"), res, 0, 1);
+
+        var cam = new hl.Bytes(16);
+        cam.setF32(0, cameraOffset.x);
+        cam.setF32(4, cameraOffset.y);
+        cam.setF32(8, 0);
+        cam.setF32(12, 0);
+
+        GL.uniform4fv(GL.getUniformLocation(shaderRender, "camera"), cam, 0, 1);
+
+        GL.useProgram(shaderRender);
+        GL.bindVertexArray(vao);
+        GL.drawArrays(GL.TRIANGLE_STRIP, 0, 4);  **/
+
+
      
         GL.activeTexture(GL.TEXTURE0);
         GL.getBufferSubData(GL.SHADER_STORAGE_BUFFER, 0, data, 0, count);
         GL.texImage2D(GL.TEXTURE_2D, 0, GL.RGBA, n, n2, 0, GL.RGBA, GL.UNSIGNED_BYTE, data);
-
         GL.useProgram(shaderRender);
         shaderUpdateTexelSize();
         //GL.clear(GL.COLOR_BUFFER_BIT);
-        GL.drawArrays(GL.TRIANGLE_STRIP, 0, 4); //GL.drawArrays(GL.GL_POINTS, 0, count); 
+        GL.drawArrays(GL.TRIANGLE_STRIP, 0, 4); //GL.drawArrays(GL.GL_POINTS, 0, count);
+    }
 
-        /* var b = new hl.Bytes(vertices.length * 4);
+    public static inline function computeShaders0() {
+        var b = new hl.Bytes(vertices.length * 4);
         for (i in 0...vertices.length)
             b.setF32(i * 4, vertices[i]);
         GL.bindBuffer(GL.ARRAY_BUFFER, vbo);
@@ -656,7 +834,7 @@ class Engine {
         GL.useProgram(shaderRender);
         GL.clear(GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT);
         GL.bindVertexArray(vao);
-        GL.drawArrays(GL.TRIANGLES, 0, Std.int(vertices.length / 6)); */
+        GL.drawArrays(GL.TRIANGLES, 0, Std.int(vertices.length / 6));
     }
 
     public static inline function worldToScreen(x:Float, y:Float):Vec3 {
@@ -693,7 +871,9 @@ class Engine {
         drawDot(x, y);
     }
     
-    /* public static inline function v(x:Float, y:Float, z:Float, r:Float, g:Float, b:Float) {
+
+
+    public static inline function v(x:Float, y:Float, z:Float, r:Float, g:Float, b:Float) {
         vertices.push(x); vertices.push(y); vertices.push(z); vertices.push(r); vertices.push(g); vertices.push(b);
     }
 
@@ -723,5 +903,5 @@ class Engine {
         v(nx-hx, ny+hy, 0, c.r, c.g, c.b);
         v(nx+hx, ny-hy, 0, c.r, c.g, c.b);
         v(nx+hx, ny+hy, 0, c.r, c.g, c.b);
-    } */
+    }
 }
