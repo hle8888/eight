@@ -340,8 +340,24 @@ class Eight {
                     var dy = y - gridH/2;
                     var dz = z - gridD/2;
 
-                    if (dx*dx + dy*dy + dz*dz < 30 * 30)
+                    /* if (dx*dx + dy*dy + dz*dz < 30 * 30)
                         bytes.setI32(i * 4, 0xFF0000);
+                    else
+                        bytes.setI32(i * 4, 0x000000); */
+
+                    var half = 15;
+                    var inside =
+                        Math.abs(dx) <= half &&
+                        Math.abs(dy) <= half &&
+                        Math.abs(dz) <= half;
+                    var border =
+                        Math.abs(dx) == half - 1 ||
+                        Math.abs(dy) == half - 1 ||
+                        Math.abs(dz) == half - 1;
+                    if (inside && border)
+                        bytes.setI32(i * 4, 0xFF0000);
+                    else if (inside)
+                        bytes.setI32(i * 4, 0x00FF2A);
                     else
                         bytes.setI32(i * 4, 0x000000);
                 } 
@@ -566,8 +582,8 @@ class Engine {
             // === экран → луч ===
             vec2 p = uv * 2.0 - 1.0;
             p.x *= res.x / res.y;
-            vec3 ro = vec3(128, 128, 0); // по центру сцены
-            vec3 target = vec3(128,128,1); // центр voxel
+            vec3 ro = vec3(64, 128, 100); // по центру сцены
+            vec3 target = vec3(128,128, 64); // центр voxel
             vec3 forward = normalize(target - ro);
             vec3 upBase = vec3(0, 1, 0);
             if (abs(dot(forward, upBase)) > 0.99)
