@@ -265,13 +265,6 @@ class Circle extends Object {
     }
 }
 
-class GPUObject {
-    public var x:Float;
-    public var y:Float;
-    public var r:Float;
-    public var color:Float; // упакованный цвет
-}
-
 class Eight {
     public static var objects:Array<Object> = []; //objects to draw
     public static var currentSelected:Object;
@@ -292,7 +285,7 @@ class Eight {
         GL.viewport(0, 0, screenW, screenH);
         GL.clearColor(0.5, 0.5, 0.5, 1.0);
 
-        Engine.allocBuffers(0.8);
+        Engine.allocBuffers();
         Engine.initShaderEngine();
         Engine.createRenderTexture();
         FontManager.initialize();
@@ -304,6 +297,11 @@ class Eight {
     public static var objectsData:hl.Bytes;
     public static var objSize:Int;
 
+    public static var bytes:hl.Bytes; 
+    public static var voxelCount:Int;
+    public static var gridW = 256; public static var gridH = 256; public static var gridD = 128;
+
+    public static var camPos = new Vec3(100, 128, 100);
     public static var target = new Vec3(128, 128, 64);
     public function runMainLoop() {
         var first = true;
@@ -313,25 +311,10 @@ class Eight {
             lastTime = now;
 
             //Engine.vertices = [];
-            //var i:Int = -1; while(++i < objects.length) objects[i].draw(); 
-            target[2] += 1 * dt;
+            camPos[0] -= 1 * dt;
             if (first) {
-                /* var stride = 4 * 4; // 4 float
-                var count = objects.length;
-                var bytes = new hl.Bytes(count * stride);
-                for (i in 0...count) {
-                    var o = objects[i];
-                    var base = i * stride;
-
-                    bytes.setF32(base + 0, o.pos.x);
-                    bytes.setF32(base + 4, o.pos.y);
-                    bytes.setF32(base + 8, o.sizeX * 0.5); // радиус
-                    bytes.setF32(base + 12, 0.4); // как float
-                } */
-
-                var gridW = 256; var gridH = 256; var gridD = 128;
-                var voxelCount = gridW * gridH * gridD;
-                var bytes = new hl.Bytes(voxelCount * 4);
+                voxelCount = gridW * gridH * gridD;
+                bytes = new hl.Bytes(voxelCount * 4);
                 for (z in 0...gridD)
                 for (y in 0...gridH)
                 for (x in 0...gridW) {
@@ -340,6 +323,28 @@ class Eight {
                     var dx = x - gridW/2;
                     var dy = y - gridH/2;
                     var dz = z - gridD/2;
+
+                    var cx = Std.int(gridW / 2);
+                    var cy = Std.int(gridH / 2);
+                    var cz = Std.int(gridD / 2);
+
+                    // рисуем только в одном слое (вид сверху)
+                    /* if (z == cz) {
+                        // ось X (горизонтальная линия)
+                        if (y == cy) {
+                            bytes.setI32(i * 4, 0xFF0000); // красная
+                        }
+                        // ось Y (вертикальная линия)
+                        else if (x == cx) {
+                            bytes.setI32(i * 4, 0x00FF00); // зелёная
+                        }
+                        else {
+                            bytes.setI32(i * 4, 0x000000);
+                        }
+                    } else {
+                        bytes.setI32(i * 4, 0x000000);
+                    } */
+
 
                     /* if (dx*dx + dy*dy + dz*dz < 30 * 30)
                         bytes.setI32(i * 4, 0xFF0000);
@@ -355,53 +360,35 @@ class Eight {
                         Math.abs(dx) == half - 1 ||
                         Math.abs(dy) == half - 1 ||
                         Math.abs(dz) == half - 1;
-                    if (inside && border)
+                    if (inside && border) {
                         bytes.setI32(i * 4, 0xFF0000);
-                    else if (inside)
+                    } else if (inside)
                         bytes.setI32(i * 4, 0x00FF2A);
                     else
-                        bytes.setI32(i * 4, 0x000000);
+                        bytes.setI32(i * 4, 0x000000); 
                 } 
 
-                /* var voxelCount = gridW * gridH;
-                var bytes = new hl.Bytes(voxelCount * 4);
-                for (y in 0...gridH) {
-                    for (x in 0...gridW) {
-                        var i = y * gridW + x;
-
-                        var color = 0x000000;
-
-                        // пример: круг в центре
-                        var dx = x - gridW/2;
-                        var dy = y - gridH/2;
-
-                        if (dx*dx + dy*dy < 40 * 40)
-                            color = 0xFF0000;
-
-                        bytes.setI32(i * 4, color);
-                    }
-                } */
-
-                // upload
                 GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.ssbo);
                 GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, bytes, GL.DYNAMIC_DRAW);
+                //var distField = buildDistanceField(bytes, gridW, gridH, gridD);
+                //GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, distField, GL.DYNAMIC_DRAW);
                 GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 0, Engine.ssbo); 
 
                 first = false;
             }
-            
-            update(dt); for(updateCb in updateCallbacks) updateCb(dt);
+
+            //var i:Int = -1; while(++i < objects.length) objects[i].draw(); 
+            //update(dt); for(updateCb in updateCallbacks) updateCb(dt);
 
             //Engine.drawDot(0, 0, 0); // центр экрана
             //Engine.drawCube(0, 0, 0, 0.5);  // куб в центре экрана, размер 0.5
 
             var frameTime = (haxe.Timer.stamp() - now);
-            var sleep = 1/60 - frameTime;
+            var sleep = 1/24 - frameTime;
             if (sleep > 0) sdl.Sdl.delay(Std.int(sleep * 1000));
             fps = 1.0 / frameTime;
 
-            if (Engine.fullQuad) Engine.computeShaders();
-            else Engine.computeShaders0();
+            Engine.computeShaders();
             window.present();
 
             var j = timerCallbacks.length; while(--j > -1) {
@@ -415,6 +402,82 @@ class Eight {
             }
         }
     }
+
+    function buildDistanceField(src:hl.Bytes, gridW:Int, gridH:Int, gridD:Int):hl.Bytes {
+        var size = gridW * gridH * gridD;
+        var dist = new hl.Bytes(size * 4);
+
+        var INF = 1 << 30;
+
+        inline function idx(x:Int, y:Int, z:Int):Int {
+            return z * gridW * gridH + y * gridW + x;
+        }
+
+        for (i in 0...size) {
+            var v = src.getI32(i * 4);
+            dist.setI32(i * 4, v != 0 ? 0 : INF);
+        }
+
+        for (z in 0...gridD)
+        for (y in 0...gridH)
+        for (x in 0...gridW) {
+            var i = idx(x,y,z);
+            var d = dist.getI32(i*4);
+
+            if (x > 0)   d = Std.int(Math.min(d, dist.getI32(idx(x-1,y,z)*4) + 1));
+            if (y > 0)   d = Std.int(Math.min(d, dist.getI32(idx(x,y-1,z)*4) + 1));
+            if (z > 0)   d = Std.int(Math.min(d, dist.getI32(idx(x,y,z-1)*4) + 1));
+
+            if (x>0 && y>0)
+                d = Std.int(Math.min(d, dist.getI32(idx(x-1,y-1,z)*4) + 2));
+
+            if (x>0 && z>0)
+                d = Std.int(Math.min(d, dist.getI32(idx(x-1,y,z-1)*4) + 2));
+
+            if (y>0 && z>0)
+                d = Std.int(Math.min(d, dist.getI32(idx(x,y-1,z-1)*4) + 2));
+
+            dist.setI32(i*4, d);
+        }
+
+        // === 3️⃣ backward pass ===
+        for (z in 0...gridD) {
+            var zz = gridD - 1 - z;
+            for (y in 0...gridH) {
+                var yy = gridH - 1 - y;
+                for (x in 0...gridW) {
+                    var xx = gridW - 1 - x;
+
+                    var i = idx(xx,yy,zz);
+                    var d = dist.getI32(i*4);
+
+                    if (xx < gridW-1)
+                        d = Std.int(Math.min(d, dist.getI32(idx(xx+1,yy,zz)*4) + 1));
+
+                    if (yy < gridH-1)
+                        d = Std.int(Math.min(d, dist.getI32(idx(xx,yy+1,zz)*4) + 1));
+
+                    if (zz < gridD-1)
+                        d = Std.int(Math.min(d, dist.getI32(idx(xx,yy,zz+1)*4) + 1));
+
+                    // диагонали
+                    if (xx < gridW-1 && yy < gridH-1)
+                        d = Std.int(Math.min(d, dist.getI32(idx(xx+1,yy+1,zz)*4) + 2));
+
+                    if (xx < gridW-1 && zz < gridD-1)
+                        d = Std.int(Math.min(d, dist.getI32(idx(xx+1,yy,zz+1)*4) + 2));
+
+                    if (yy < gridH-1 && zz < gridD-1)
+                        d = Std.int(Math.min(d, dist.getI32(idx(xx,yy+1,zz+1)*4) + 2));
+
+                    dist.setI32(i*4, d);
+                }
+            }
+        }
+
+        return dist;
+    }
+
 
     public static inline function delay(ms:Int) sdl.Sdl.delay(ms);
 
@@ -476,8 +539,6 @@ class Engine {
     public static var zoom:Float = 1;
     public static var cameraOffset = new Vec3(0, 0, 0);
 
-    public static var fullQuad = true;
-
     static var data:hl.Bytes; 
     static var result:hl.Bytes;
     
@@ -487,7 +548,7 @@ class Engine {
     
     static var stride:Int; 
     static var count:Int;
-    public static function allocBuffers(zoom:Float = 1) {
+    public static function allocBuffers(zoom:Float = 1.5) {
         n = Std.int(888 / zoom); n2 = Std.int(500 / zoom);
         trace(n, n2);
 
@@ -507,8 +568,8 @@ class Engine {
         //shaderSpace = compileShader(GL.createShader(GL.FRAGMENT_SHADER), fragSrcQuadSpace, true, shaderSpace);
 
         shaderCompute = compileShader(GL.createShader(GL.COMPUTE_SHADER), shaderSource);
-        shaderRender = compileShader(GL.createShader(GL.VERTEX_SHADER), fullQuad ? vertexSrcQuad : vertexSrc, false);
-        shaderRender = compileShader(GL.createShader(GL.FRAGMENT_SHADER), fullQuad ? fragSrcQuad : fragSrc, true, shaderRender);
+        shaderRender = compileShader(GL.createShader(GL.VERTEX_SHADER), vertexSrcQuad, false);
+        shaderRender = compileShader(GL.createShader(GL.FRAGMENT_SHADER), fragSrcQuad, true, shaderRender);
     }
 
     static var shaderSource = "#version 430
@@ -544,12 +605,9 @@ class Engine {
         }
     ";
     static var fragSrcQuad = "#version 430
-        in vec2 uv;                   // получаем UV
-        uniform sampler2D uTexture;   // текстура
-        uniform sampler2D uColorMap;  // TEXTURE1
-        //uniform vec4 resolution;
-        //uniform vec4 camera;
-        //uniform vec4 uTexelSize;
+        in vec2 uv;                   
+        uniform sampler2D uTexture;  
+        uniform sampler2D uColorMap;  
         uniform vec4 camPos;
         uniform vec4 camForward;
         uniform vec4 camRight;
@@ -561,154 +619,109 @@ class Engine {
 
         vec3 unpackColor(int c) {
             return vec3(
-                (c >> 16) & 255,
-                (c >> 8) & 255,
-                c & 255
-            ) * (1.0 / 255.0);
+                float((c >> 16) & 255),
+                float((c >> 8) & 255),
+                float(c & 255)
+            ) * 0.00392156862; // 1/255
+        }
+        
+        float map(vec3 p) {
+            ivec3 grid = ivec3(256,256,128);
+            ivec3 ip = ivec3(floor(p));
+
+            //if (abs(p.z) > 0.5) return 1000.0; //gridD == 1
+            if (ip.x < 0 || ip.y < 0 || ip.z < 0 ||
+                ip.x >= grid.x || ip.y >= grid.y || ip.z >= grid.z)
+                return 1000.0;
+
+            int idx = ip.z * grid.x * grid.y + ip.y * grid.x + ip.x;
+            int v = voxels[idx];
+
+            if (v != 0) return 0.0; // поверхность
+
+            return 1.0;
+        }
+
+        vec3 raymarch(vec3 ro, vec3 rd) {
+            float t = 0.0;
+
+            for (int i = 0; i < 64; i++) {
+                vec3 p = ro + rd * t;
+
+                float d = map(p);
+
+                if (d < 0.5) {
+                    ivec3 ip = ivec3(floor(p));
+                    int idx = ip.z * 256 * 256 + ip.y * 256 + ip.x;
+                    int v = voxels[idx];
+                    return unpackColor(v);
+                }
+
+                t += d; 
+
+                if (t > 300.0) break;
+            }
+
+            return vec3(0.0);
+        }
+
+        vec3 getNormal(vec3 p) {
+            float e = 0.5;
+
+            float dx = map(p + vec3(e,0,0)) - map(p - vec3(e,0,0));
+            float dy = map(p + vec3(0,e,0)) - map(p - vec3(0,e,0));
+            float dz = map(p + vec3(0,0,e)) - map(p - vec3(0,0,e));
+
+            return normalize(vec3(dx,dy,dz));
         }
 
         void main() {
-            /* vec4 center = texture(uColorMap, uv);
-            vec4 up    = texture(uColorMap, uv + vec2(0.0, uTexelSize.y));
-            vec4 down  = texture(uColorMap, uv + vec2(0.0, -uTexelSize.y));
-            vec4 left  = texture(uColorMap, uv + vec2(-uTexelSize.x, 0.0));
-            vec4 right = texture(uColorMap, uv + vec2( uTexelSize.x, 0.0));
-            //color = max(max(center, up), max(max(down, left), right)); 
-
-            vec4 c = max(max(center, up), max(max(down, left), right));
-            //if (c.rgb == vec3(0.0))
-                //discard;
-            color = c; */
-
-            vec2 res = vec2(888, 500);
-            ivec3 grid = ivec3(256, 256, 128); // 3D!!!
-            // === экран → луч ===
-            vec2 p = uv * 2.0 - 1.0;
-            p.x *= res.x / res.y;
-
-            vec3 ro = camPos.xyz; //vec3 ro = vec3(100, 100, 100); // по центру сцены
-            //vec3 target = vec3(128,128, 64); // центр voxel            
-            vec3 forward = camForward.xyz; //vec3 forward = normalize(target - ro);            
-            vec3 upBase = vec3(0, 1, 0);
-            //if (abs(dot(forward, upBase)) > 0.99) upBase = vec3(1, 0, 0);
-            vec3 right = camRight.xyz; //vec3 right = normalize(cross(forward, upBase));
-            vec3 up = camUp.xyz; //vec3 up = cross(right, forward);
-
-            float fov = 1.0;
-            vec3 rd = normalize(forward + p.x * right * fov + p.y * up * fov);
-            // === voxel координаты ===
-            vec3 pos = ro;
-            ivec3 ipos = ivec3(floor(pos));
-            vec3 invRd = 1.0 / rd;
-            vec3 deltaDist = abs(invRd);
-            vec3 srd = sign(rd);
-            ivec3 step = ivec3(srd);
-            vec3 sideDist = (srd * (vec3(ipos) - pos) + (srd * 0.5) + 0.5) * deltaDist;
-            vec3 hitColor = vec3(0.0);
-            bool hit = false;
-            for (int i = 0; i < 128; i++) {
-
-                if (any(lessThan(ipos, ivec3(0))) || any(greaterThanEqual(ipos, grid)))
-                    break;
-
-                int idx = ipos.z * grid.x * grid.y + ipos.y * grid.x + ipos.x;
-                int v = voxels[idx];
-
-                if (v != 0) {
-                    color = vec4(unpackColor(v), 1.0);
-                    return;
-                }
-
-                bvec3 mask = lessThanEqual(sideDist, min(sideDist.yzx, sideDist.zxy));
-                vec3 m = vec3(mask);
-
-                sideDist += m * deltaDist;
-                ipos += ivec3(m) * step;
-            }
-
-            color = vec4(0.0);
-
-
-            /* vec2 res = vec2(888, 500);
-            vec2 cam = vec2(0, 0);
-            vec2 grid = vec2(256, 256);
-            vec2 pv = uv * 2.0 - 1.0;
-            pv.x *= res.x / res.y;
-            // обратно в [0..1]
-            vec2 uvFixed = (pv + 1.0) * 0.5;
-            ivec2 p = ivec2(floor(uvFixed * grid));
-            // === bounds check ===
-            if (p.x < 0 || p.y < 0 || p.x >= int(grid.x) || p.y >= int(grid.y)) {
+            ivec2 pix = ivec2(gl_FragCoord.xy);
+            if (((pix.x ^ pix.y) & 1) == 1) {
                 color = vec4(0.0);
                 return;
             }
-            int idx = p.y * int(grid.x) + p.x;
-            int v = voxels[idx];
-            if (v == 0) {
-                color = vec4(0.0);
-            } else {
-                color = vec4(unpackColor(v), 1.0);
-            } */
-        }
-    ";
-    /* static var fragSrcQuad = "#version 430
-        in vec2 uv;
-        out vec4 color;
 
-        layout(std430, binding = 0) buffer Objects {
-            vec4 objs[]; 
-            // x,y,r,color
-        }; 
 
-        uniform int objCount;
-        //uniform vec4 resolution;
-        //uniform vec4 camera;
+            vec2 res = vec2(888, 500);
 
-        float intersectCircle(vec2 ro, vec2 rd, vec3 c) {
-            vec2 oc = ro - c.xy;
-            float b = dot(oc, rd);
-            float c2 = dot(oc, oc) - c.z * c.z;
-            float h = b*b - c2;
-            if (h < 0.0) return -1.0;
-            return -b - sqrt(h);
-        }
-
-        vec3 unpackColor(float c) {
-            int ci = int(c);
-            float r = float((ci >> 16) & 255) / 255.0;
-            float g = float((ci >> 8) & 255) / 255.0;
-            float b = float(ci & 255) / 255.0;
-            return vec3(r,g,b);
-        } 
-
-        void main() {
             vec2 p = uv * 2.0 - 1.0;
-            vec2 res = resolution.xy;
-            vec2 cam = camera.xy;
-
             p.x *= res.x / res.y;
 
-            vec2 ro = cam;
-            //vec2 rd = normalize(p);
-            vec2 rd = normalize((cam + p) - ro);
+            vec3 ro = camPos.xyz;
+            vec3 rd = normalize(
+                camForward.xyz +
+                p.x * camRight.xyz +
+                p.y * camUp.xyz
+            );
 
-            float tMin = 1e9;
             vec3 col = vec3(0.0);
+            float t = 0.0;
 
-            for (int i = 0; i < objCount; i++) {
-                vec4 o = objs[i];
-                float t = intersectCircle(ro, rd, vec3(o.x, o.y, o.z));
+            for (int i = 0; i < 64; i++) {
+                vec3 pos = ro + rd * t;
+                float d = map(pos);
 
-                if (t > 0.0 && t < tMin) {
-                    tMin = t;
-                    col = unpackColor(o.w);
+                if (d < 0.5) {
+                    ivec3 ip = ivec3(floor(pos));
+                    int idx = ip.z * 256 * 256 + ip.y * 256 + ip.x;
+                    int v = voxels[idx];
+
+                    vec3 n = getNormal(pos);
+
+                    float light = dot(n, normalize(vec3(0.5,1.0,0.3))) * 0.5 + 0.5;
+
+                    col = unpackColor(v);// * light;
+                    break;
                 }
+
+                t += d;
+
+                if (t > 300.0) break;
             }
 
-            color = vec4(col, 1.0); 
-
-            color = vec4(0, 0, 0, 0);
-        }"; */
+            color = vec4(col, 1.0);
+        }";
 
     static var fragSrcQuadSpace = "#version 430
         in vec2 uv;
@@ -766,27 +779,6 @@ class Engine {
 
             color = vec4(col, 1.0);
         }";
-    //STANDART PIPELINE
-    static var vertexSrc = "#version 430
-        in vec3 inPos;
-        in vec3 inColor;
-
-        uniform mat4 uProjection;
-        uniform mat4 uView;
-
-        out vec3 vColor;
-        void main() {
-            //gl_Position = uProjection * uView * vec4(inPos, 1.0);
-            gl_Position = vec4(inPos, 1.0);
-            vColor = inColor;
-        }";
-
-    static var fragSrc = "#version 430
-        in vec3 vColor;
-        out vec4 color;
-        void main() {
-            color = vec4(vColor, 1.0);
-        }";
 
     public static function compileShader(shader, source, link = true, prog = null) {
         GL.shaderSource(shader, source);
@@ -831,11 +823,6 @@ class Engine {
         //GL.enable(GL.BLEND);
 		//GL.blendFunc(GL.SRC_ALPHA, GL.ONE_MINUS_SRC_ALPHA);
 
-        if (fullQuad) defineVertices1();
-        else defineVertices0();
-    }
-
-    public static inline function defineVertices1() {
         final vertices = Float32Array.fromArray([
             -1,  1, 0.0, 0.0, 1.0,   // pos(x,y,z), uv(u,v)
             -1, -1, 0.0, 0.0, 0.0,
@@ -856,20 +843,6 @@ class Engine {
 		GL.enableVertexAttribArray(texAttrib);
         GL.vertexAttribPointer(posAttrib, 3, GL.FLOAT, false, 20, 0);   // x,y,z
         GL.vertexAttribPointer(texAttrib, 2, GL.FLOAT, false, 20, 12);  // uv 
-    }
-
-    public static inline function defineVertices0() {
-        vbo = GL.createBuffer();
-        GL.bindBuffer(GL.ARRAY_BUFFER, vbo);
-        GL.bufferData(GL.ARRAY_BUFFER, 0, null, GL.DYNAMIC_DRAW);
-        vao = GL.createVertexArray();
-        GL.bindVertexArray(vao);
-        final posAttrib = GL.getAttribLocation(shaderRender, 'inPos');
-        final colAttrib = GL.getAttribLocation(shaderRender, 'inColor');
-        GL.enableVertexAttribArray(posAttrib);
-        GL.vertexAttribPointer(posAttrib, 3, GL.FLOAT, false, 24, 0);
-        GL.enableVertexAttribArray(colAttrib);
-        GL.vertexAttribPointer(colAttrib, 3, GL.FLOAT, false, 24, 12);
     }
 
     public static inline function computeShadersBackground() {
@@ -907,71 +880,15 @@ class Engine {
         GL.useProgram(shaderCompute);
         GL.dispatchCompute(n, n, 1);
         GL.memoryBarrier(GL.SHADER_STORAGE_BARRIER_BIT); */
-        /* GL.clear(GL.COLOR_BUFFER_BIT);
-        GL.useProgram(shaderCompute);
-        GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 0, ssbo);
-        GL.uniform1i(GL.getUniformLocation(shaderCompute, "objCount"), Eight.objects.length);
-
-        var resLoc = GL.getUniformLocation(shaderCompute, "resolution");
-        var b = new hl.Bytes(16);
-        b.setF32(0, n);
-        b.setF32(4, n2);
-        b.setF32(8, 0);
-        b.setF32(12, 0);
-        GL.uniform4fv(resLoc, b, 0, 1); 
-
-        GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, ssbo);
-        GL.bufferData(GL.SHADER_STORAGE_BUFFER, Eight.objSize, Eight.objectsData, GL.DYNAMIC_DRAW);
-        GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 0, ssbo);
-
-        GL.dispatchCompute(
-            Std.int(Math.ceil(n / 8)),
-            Std.int(Math.ceil(n2 / 8)),
-            1
-        );
-        GL.memoryBarrier(GL.ALL_BARRIER_BITS);
-        GL.memoryBarrier(GL.SHADER_IMAGE_ACCESS_BARRIER_BIT);
-
-        GL.useProgram(shaderRender);
-        GL.activeTexture(GL.TEXTURE0);
-        GL.bindTexture(GL.TEXTURE_2D, tex);
-        GL.uniform1i(GL.getUniformLocation(shaderRender, "uColorMap"), 0);
-        GL.bindVertexArray(vao);
-        GL.drawArrays(GL.TRIANGLE_STRIP, 0, 4); */
-
-        //GL.useProgram(shaderRender);
-        //GL.uniform1i(GL.getUniformLocation(shaderRender, "objCount"), Eight.objects.length);
-        
-        var res = new hl.Bytes(4*4); // 4 float
-        res.setF32(0, n);
-        res.setF32(4, n2);
-        res.setF32(8, 0);
-        res.setF32(12, 0);
-
-        
-
-        var cam = new hl.Bytes(4*4);
-        cam.setF32(0, cameraOffset.x);
-        cam.setF32(4, cameraOffset.y);
-        cam.setF32(8, 0);
-        cam.setF32(12, 0);
-
-        
-
-        /** GL.useProgram(shaderRender);
-        GL.bindVertexArray(vao);
-        GL.drawArrays(GL.TRIANGLE_STRIP, 0, 4);  **/
-
-
      
         GL.activeTexture(GL.TEXTURE0);
         GL.getBufferSubData(GL.SHADER_STORAGE_BUFFER, 0, data, 0, count);
         GL.texImage2D(GL.TEXTURE_2D, 0, GL.RGBA, n, n2, 0, GL.RGBA, GL.UNSIGNED_BYTE, data);
         GL.useProgram(shaderRender);        
-        var b = new hl.Bytes(4*4); b.setF32(0, 100); b.setF32(4, 100); b.setF32(8, 100); b.setF32(12, 0.0); 
+        var b = new hl.Bytes(4*4); b.setF32(0, Eight.camPos[0]); b.setF32(4, Eight.camPos[1]); b.setF32(8, Eight.camPos[2]); b.setF32(12, 0.0); 
         GL.uniform4fv(GL.getUniformLocation(shaderRender, "camPos"), b, 0, 1);
 
-        var ro = new Vec3(100, 100, 100);
+        var ro = Eight.camPos;
         var target = Eight.target; //var target = new Vec3(128, 128, 64);
         var forward = target.sub(ro).normalize();
         b = new hl.Bytes(4*4); b.setF32(0, forward[0]); b.setF32(4, forward[1]); b.setF32(8, forward[2]); b.setF32(12, 0.0); 
@@ -984,25 +901,12 @@ class Engine {
         var up = right.cross(forward);
         b = new hl.Bytes(4*4); b.setF32(0, up[0]); b.setF32(4, up[1]); b.setF32(8, up[2]); b.setF32(12, 0.0); 
         GL.uniform4fv(GL.getUniformLocation(shaderRender, "camUp"), b, 0, 1);
-        
 
         //GL.uniform4fv(GL.getUniformLocation(shaderRender, "resolution"), res, 0, 1);
         //GL.uniform4fv(GL.getUniformLocation(shaderRender, "camera"), cam, 0, 1);
         //shaderUpdateTexelSize();
         //GL.clear(GL.COLOR_BUFFER_BIT);
         GL.drawArrays(GL.TRIANGLE_STRIP, 0, 4); //GL.drawArrays(GL.GL_POINTS, 0, count);
-    }
-
-    public static inline function computeShaders0() {
-        var b = new hl.Bytes(vertices.length * 4);
-        for (i in 0...vertices.length)
-            b.setF32(i * 4, vertices[i]);
-        GL.bindBuffer(GL.ARRAY_BUFFER, vbo);
-        GL.bufferData(GL.ARRAY_BUFFER, vertices.length * 4, b, GL.DYNAMIC_DRAW);
-        GL.useProgram(shaderRender);
-        GL.clear(GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT);
-        GL.bindVertexArray(vao);
-        GL.drawArrays(GL.TRIANGLES, 0, Std.int(vertices.length / 6));
     }
 
     public static inline function worldToScreen(x:Float, y:Float):Vec3 {
@@ -1021,7 +925,7 @@ class Engine {
         );
     }
 
-    public static inline function drawDot(x:Float = 0.0, y:Float = 0.0, z:Float = 0.0, color:Int = 0xFF79786B, isUI:Bool=false) {
+    public static inline function drawDot2(x:Float = 0.0, y:Float = 0.0, z:Float = 0.0, color:Int = 0xFF79786B, isUI:Bool=false) {
         var xi = cast x;
         var yi = cast y;
         if (!isUI) {
@@ -1035,41 +939,35 @@ class Engine {
         data.setI32((yi * n + xi) << 2, color); 
     } 
 
-    public static inline function drawPixel(x:Float, y:Float) {
-        drawDot(x, y);
-    }
-    
+
+    static var callOnce = true;
+    public static inline function drawDot(x:Float = 0.0, y:Float = 0.0, z:Float = 0.0, color:Int = 0xFF79786B, isUI:Bool=false) {
+        //if (!callOnce) return;
+        var xi = cast x;
+        var yi = cast y;
+        if (isUI) return;
+        if (!isUI) {
+            var screenPos = worldToScreen(x, y);
+            xi = Std.int(screenPos[0]);
+            yi = Std.int(screenPos[1]);
+        }
+        
+        if (xi < 1 || yi < 1 || xi > n - 1|| yi > n2 - 1) return;
+        xi = Std.int(xi * Eight.gridW / n);
+        yi = Std.int(yi * Eight.gridH / n2 * n2/n);
 
 
-    public static inline function v(x:Float, y:Float, z:Float, r:Float, g:Float, b:Float) {
-        vertices.push(x); vertices.push(y); vertices.push(z); vertices.push(r); vertices.push(g); vertices.push(b);
-    }
+        //xi = Std.int(xi / Eight.gridW - 0.5);
+        //yi = Std.int(yi / Eight.gridH - 0.5);
 
-    public static inline function unpackColor(color:Int) {
-        var r = ((color >> 16) & 0xFF) / 255.0;
-        var g = ((color >> 8) & 0xFF) / 255.0;
-        var b = (color & 0xFF) / 255.0;
-        return { r:r, g:g, b:b };
-    }
+        //var gx = Std.int(fx * Eight.gridW + Eight.gridW * 0.5);
+        //var gy = Std.int(fy * Eight.gridH + Eight.gridH * 0.5);
+        //trace(xi, yi);
+        if (xi < 0 || yi < 0 || xi >= Eight.gridW || yi >= Eight.gridH) return;
 
-    public static inline function drawDotV(x:Float = 0.0, y:Float = 0.0, z:Float = -2.0, color:Int = 0xFF79786B) {
-        var nx = (x / n) * 2.0 - 1.0;
-        //var ny = 1.0 - (y / n2) * 2.0;
-        var ny = (y / n2) * 2.0 - 1.0;
+        var i:Int = Std.int(Eight.gridD/2) * Eight.gridW * Eight.gridH + yi * Eight.gridW + xi;        
+        Eight.bytes.setI32(i * 4, color); 
 
-        var sx = 2.0 / n;
-        var sy = 2.0 / n2;
-
-        var hx = sx * 0.5;
-        var hy = sy * 0.5;
-
-        var c = unpackColor(color);
-
-        v(nx-hx, ny+hy, 0, c.r, c.g, c.b);
-        v(nx-hx, ny-hy, 0, c.r, c.g, c.b);
-        v(nx+hx, ny-hy, 0, c.r, c.g, c.b);
-        v(nx-hx, ny+hy, 0, c.r, c.g, c.b);
-        v(nx+hx, ny-hy, 0, c.r, c.g, c.b);
-        v(nx+hx, ny+hy, 0, c.r, c.g, c.b);
-    }
+        callOnce = false; 
+    } 
 }
