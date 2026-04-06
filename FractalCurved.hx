@@ -75,15 +75,16 @@ class Fractal extends Eight {
         if (s2 >= 4) s2d = -0.01 * 1;
         if (s2 <= 1) s2d = 0.01 * 1;        
 
-        dot1.pos[0] += d1 * s1 * dt;
-        dot2.pos[1] += d2 * s2 * dt;
+        dot1.pos[0] += d1 * Math.sqrt(s1) * dt;
+        dot2.pos[1] += d2 * Math.sqrt(s2) * dt;
 
         var r2 = 50*Math.sin(t)+100;
+        var r3 = 50*Math.cos(t)+100;
 
         if (dot1.pos[0] <= c[0]-r2) d1 = 100;
-        if (dot2.pos[1] <= c[1]-r2) d2 = 100;
+        if (dot2.pos[1] <= c[1]-r3) d2 = 100;
         if (dot1.pos[0] >= c[0]+r2) d1 = -100;
-        if (dot2.pos[1] >= c[1]+r2) d2 = -100;
+        if (dot2.pos[1] >= c[1]+r3) d2 = -100;
 
         var d = new Dot(4, 4, null, colors[Std.int(t / 10) % 6]);
         d.pos = new Vec3(dot1.pos[0]+500, dot2.pos[1], 0);
