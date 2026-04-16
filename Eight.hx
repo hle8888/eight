@@ -3,6 +3,7 @@
 import sdl.GL;
 import sdl.Sdl;
 import sdl.*;
+import sdl.Event.EventType;
 import haxe.io.UInt8Array;
 import haxe.io.Float32Array;
 import linc.opengl.*;
@@ -308,21 +309,92 @@ class Eight {
     public static var distBytes:hl.Bytes;
     static var distOutsideBytes:hl.Bytes;
     static var distInsideBytes:hl.Bytes;
-    public static var voxelFieldDirty:Bool = true;
     public static var voxelCount:Int;
     public static var gridW = 64; public static var gridH = 64; public static var gridD = 64;
 
-    public static var camPos = new Vec3(32, 32, 100);
-    public static var target = new Vec3(32, 32, 32);
+    public static var camPos = new Vec3(32, 32, 64);
+    public static var target = new Vec3(32, 32, 0);
+    static inline var KEY_LEFT = 1073741904;
+    static inline var KEY_RIGHT = 1073741903;
+    static inline var KEY_UP = 1073741906;
+    static inline var KEY_DOWN = 1073741905;
+    static inline var VOXEL_CAMERA_SPEED = 24.0;
+    static inline var VOXEL_MOUSE_SENSITIVITY = 0.005;
+    static inline var VOXEL_PITCH_LIMIT = 1.45;
+
+    static var isArrowLeftPressed = false;
+    static var isArrowRightPressed = false;
+    static var isArrowUpPressed = false;
+    static var isArrowDownPressed = false;
+    static var camYaw:Float = 0.0;
+    static var camPitch:Float = 0.0;
+    static var isCameraAnglesInitialized = false;
+    static var lastMouseX:Float = -1;
+    static var lastMouseY:Float = -1;
+
+    static inline function clamp(value:Float, min:Float, max:Float):Float {
+        return value < min ? min : (value > max ? max : value);
+    }
+
+    static function syncCameraAnglesFromTarget():Void {
+        var forward = target.sub(camPos).normalize();
+        if (forward.length() == 0) forward = new Vec3(0, 0, -1);
+
+        camYaw = Math.atan2(forward.z, forward.x);
+        camPitch = clamp(Math.asin(forward.y), -VOXEL_PITCH_LIMIT, VOXEL_PITCH_LIMIT);
+        isCameraAnglesInitialized = true;
+        syncCameraTarget();
+    }
+
+    static inline function getCameraForward():Vec3 {
+        var cosPitch = Math.cos(camPitch);
+        return new Vec3(
+            Math.cos(camYaw) * cosPitch,
+            Math.sin(camPitch),
+            Math.sin(camYaw) * cosPitch
+        ).normalize();
+    }
+
+    static inline function getCameraRight():Vec3 {
+        var forward = getCameraForward();
+        var right = new Vec3(0, 1, 0).cross(forward);
+        if (right.length() < 0.0001) return new Vec3(1, 0, 0);
+        return right.normalize();
+    }
+
+    static inline function syncCameraTarget():Void {
+        target = camPos.add(getCameraForward());
+    }
+
+    static function updateVoxelFlyCamera(dt:Float):Void {
+        if (!isCameraAnglesInitialized) syncCameraAnglesFromTarget();
+
+        var moveDir = new Vec3(0, 0, 0);
+        var forward = getCameraForward();
+        var right = getCameraRight();
+
+        if (isArrowUpPressed) moveDir = moveDir.add(forward);
+        if (isArrowDownPressed) moveDir = moveDir.sub(forward);
+        if (isArrowRightPressed) moveDir = moveDir.add(right);
+        if (isArrowLeftPressed) moveDir = moveDir.sub(right);
+
+        if (moveDir.length() > 0) {
+            camPos = camPos.add(moveDir.normalize().multiply(VOXEL_CAMERA_SPEED * dt));
+        }
+
+        syncCameraTarget();
+    }
+
     public function runMainLoop() {
         var first = true;
         while(Sdl.processEvents(onEvent) && run) {
             var now = haxe.Timer.stamp();
             var dt = now - lastTime;
             lastTime = now;
+            updateVoxelFlyCamera(dt);
 
             //Engine.vertices = [];
-            camPos[0] -= 1 * dt;
+            //camPos[2] -= 1 * dt;
             if (first) {
                 voxelCount = gridW * gridH * gridD;
                 bytes = new hl.Bytes(voxelCount * 4);
@@ -365,7 +437,6 @@ class Eight {
                     else
                         bytes.setI32(i * 4, 0x000000); */
 
-                    /*
                     var half = 15;
                     var inside =
                         Math.abs(dx) <= half &&
@@ -381,7 +452,6 @@ class Eight {
                         bytes.setI32(i * 4, 0x00FF2A);
                     else
                         bytes.setI32(i * 4, 0x000000);
-                    */
                 } 
 
                 //buildDistanceField(bytes, distBytes, distOutsideBytes, distInsideBytes, gridW, gridH, gridD);
@@ -394,26 +464,24 @@ class Eight {
                 GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, distBytes, GL.DYNAMIC_DRAW);
                 GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 1, Engine.distSsbo); 
 
-                voxelFieldDirty = false;
                 first = false;
             }
 
             var i:Int = -1; while(++i < objects.length) objects[i].draw(); 
             update(dt); for(updateCb in updateCallbacks) updateCb(dt);
 
-            if (voxelFieldDirty) {
+            
                 //buildDistanceField(bytes, distBytes, distOutsideBytes, distInsideBytes, gridW, gridH, gridD);
 
-                GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.ssbo);
-                GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, bytes, GL.DYNAMIC_DRAW);
-                GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 0, Engine.ssbo); 
+            GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.ssbo);
+            GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, bytes, GL.DYNAMIC_DRAW);
+            GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 0, Engine.ssbo); 
 
-                GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.distSsbo);
-                GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, distBytes, GL.DYNAMIC_DRAW);
-                GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 1, Engine.distSsbo); 
+            GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.distSsbo);
+            GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, distBytes, GL.DYNAMIC_DRAW);
+            GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 1, Engine.distSsbo); 
 
-                voxelFieldDirty = false;
-            }
+            
 
             //Engine.drawDot(0, 0, 0); // центр экрана
             //Engine.drawCube(0, 0, 0, 0.5);  // куб в центре экрана, размер 0.5
@@ -572,6 +640,35 @@ class Eight {
     }
 
     public function onEvent(event:sdl.Event):Bool {
+        if (!isCameraAnglesInitialized) syncCameraAnglesFromTarget();
+
+        if (event.type == EventType.KeyDown) {
+            if (event.keyCode == KEY_LEFT) isArrowLeftPressed = true;
+            if (event.keyCode == KEY_RIGHT) isArrowRightPressed = true;
+            if (event.keyCode == KEY_UP) isArrowUpPressed = true;
+            if (event.keyCode == KEY_DOWN) isArrowDownPressed = true;
+        }
+
+        if (event.type == EventType.KeyUp) {
+            if (event.keyCode == KEY_LEFT) isArrowLeftPressed = false;
+            if (event.keyCode == KEY_RIGHT) isArrowRightPressed = false;
+            if (event.keyCode == KEY_UP) isArrowUpPressed = false;
+            if (event.keyCode == KEY_DOWN) isArrowDownPressed = false;
+        }
+
+        if (event.type == EventType.MouseMove) {
+            if (lastMouseX >= 0 && lastMouseY >= 0) {
+                var dx = event.mouseX - lastMouseX;
+                var dy = event.mouseY - lastMouseY;
+                camYaw -= dx * VOXEL_MOUSE_SENSITIVITY;
+                camPitch = clamp(camPitch - dy * VOXEL_MOUSE_SENSITIVITY, -VOXEL_PITCH_LIMIT, VOXEL_PITCH_LIMIT);
+                syncCameraTarget();
+            }
+
+            lastMouseX = event.mouseX;
+            lastMouseY = event.mouseY;
+        }
+
         var i:Int = -1; while(++i < eventCallbacks.length) {
             eventCallbacks[i](event);
         }
@@ -1019,10 +1116,10 @@ class Engine {
         GL.uniform4fv(GL.getUniformLocation(shaderRender, "camForward"), b, 0, 1);
 
         var upBase = new Vec3(0, 1, 0);
-        var right = forward.cross(upBase).normalize();
+        var right = upBase.cross(forward).normalize();
         b = new hl.Bytes(4*4); b.setF32(0, right[0]); b.setF32(4, right[1]); b.setF32(8, right[2]); b.setF32(12, 0.0); 
         GL.uniform4fv(GL.getUniformLocation(shaderRender, "camRight"), b, 0, 1);
-        var up = right.cross(forward);
+        var up = forward.cross(right).normalize();
         b = new hl.Bytes(4*4); b.setF32(0, up[0]); b.setF32(4, up[1]); b.setF32(8, up[2]); b.setF32(12, 0.0); 
         GL.uniform4fv(GL.getUniformLocation(shaderRender, "camUp"), b, 0, 1);
 
@@ -1088,7 +1185,6 @@ class Engine {
         if (Eight.bytes.getI32(i * 4) == color) return;
 
         Eight.bytes.setI32(i * 4, color);
-        Eight.voxelFieldDirty = true;
 
         callOnce = false; 
     } 
