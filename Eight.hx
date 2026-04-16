@@ -306,11 +306,14 @@ class Eight {
 
     public static var bytes:hl.Bytes; 
     public static var distBytes:hl.Bytes;
+    static var distOutsideBytes:hl.Bytes;
+    static var distInsideBytes:hl.Bytes;
+    public static var voxelFieldDirty:Bool = true;
     public static var voxelCount:Int;
-    public static var gridW = 256; public static var gridH = 256; public static var gridD = 256;
+    public static var gridW = 64; public static var gridH = 64; public static var gridD = 64;
 
-    public static var camPos = new Vec3(128, 128, 200);
-    public static var target = new Vec3(128, 128, 128);
+    public static var camPos = new Vec3(32, 32, 100);
+    public static var target = new Vec3(32, 32, 32);
     public function runMainLoop() {
         var first = true;
         while(Sdl.processEvents(onEvent) && run) {
@@ -319,11 +322,13 @@ class Eight {
             lastTime = now;
 
             //Engine.vertices = [];
-            //camPos[0] -= 1 * dt;
+            camPos[0] -= 1 * dt;
             if (first) {
                 voxelCount = gridW * gridH * gridD;
                 bytes = new hl.Bytes(voxelCount * 4);
                 distBytes = new hl.Bytes(voxelCount * 4);
+                distOutsideBytes = new hl.Bytes(voxelCount * 4);
+                distInsideBytes = new hl.Bytes(voxelCount * 4);
                 for (z in 0...gridD)
                 for (y in 0...gridH)
                 for (x in 0...gridW) {
@@ -360,6 +365,7 @@ class Eight {
                     else
                         bytes.setI32(i * 4, 0x000000); */
 
+                    /*
                     var half = 15;
                     var inside =
                         Math.abs(dx) <= half &&
@@ -375,10 +381,10 @@ class Eight {
                         bytes.setI32(i * 4, 0x00FF2A);
                     else
                         bytes.setI32(i * 4, 0x000000);
-                    
+                    */
                 } 
 
-                distBytes = buildDistanceField(bytes, gridW, gridH, gridD);
+                //buildDistanceField(bytes, distBytes, distOutsideBytes, distInsideBytes, gridW, gridH, gridD);
 
                 GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.ssbo);
                 GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, bytes, GL.DYNAMIC_DRAW);
@@ -388,21 +394,26 @@ class Eight {
                 GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, distBytes, GL.DYNAMIC_DRAW);
                 GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 1, Engine.distSsbo); 
 
+                voxelFieldDirty = false;
                 first = false;
             }
 
             var i:Int = -1; while(++i < objects.length) objects[i].draw(); 
             update(dt); for(updateCb in updateCallbacks) updateCb(dt);
 
-            distBytes = buildDistanceField(bytes, gridW, gridH, gridD);
+            if (voxelFieldDirty) {
+                //buildDistanceField(bytes, distBytes, distOutsideBytes, distInsideBytes, gridW, gridH, gridD);
 
-            GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.ssbo);
-            GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, bytes, GL.DYNAMIC_DRAW);
-            GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 0, Engine.ssbo); 
+                GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.ssbo);
+                GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, bytes, GL.DYNAMIC_DRAW);
+                GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 0, Engine.ssbo); 
 
-            GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.distSsbo);
-            GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, distBytes, GL.DYNAMIC_DRAW);
-            GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 1, Engine.distSsbo); 
+                GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.distSsbo);
+                GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, distBytes, GL.DYNAMIC_DRAW);
+                GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 1, Engine.distSsbo); 
+
+                voxelFieldDirty = false;
+            }
 
             //Engine.drawDot(0, 0, 0); // центр экрана
             //Engine.drawCube(0, 0, 0, 0.5);  // куб в центре экрана, размер 0.5
@@ -431,9 +442,7 @@ class Eight {
         return z * gridW * gridH + y * gridW + x;
     }
 
-    static function buildDistancePass(src:hl.Bytes, gridW:Int, gridH:Int, gridD:Int, targetFilled:Bool):hl.Bytes {
-        var size = gridW * gridH * gridD;
-        var dist = new hl.Bytes(size * 4);
+    static function buildDistancePass(src:hl.Bytes, dist:hl.Bytes, gridW:Int, gridH:Int, gridD:Int, targetFilled:Bool):Void {
         var inf = 1 << 28;
 
         inline function relax(x:Int, y:Int, z:Int, nx:Int, ny:Int, nz:Int, weight:Int, current:Int):Int {
@@ -509,20 +518,16 @@ class Eight {
             }
         }
 
-        return dist;
     }
 
-    static function buildDistanceField(src:hl.Bytes, gridW:Int, gridH:Int, gridD:Int):hl.Bytes {
-        var outside = buildDistancePass(src, gridW, gridH, gridD, true);
-        var inside = buildDistancePass(src, gridW, gridH, gridD, false);
+    static function buildDistanceField(src:hl.Bytes, sdf:hl.Bytes, outside:hl.Bytes, inside:hl.Bytes, gridW:Int, gridH:Int, gridD:Int):Void {
+        buildDistancePass(src, outside, gridW, gridH, gridD, true);
+        buildDistancePass(src, inside, gridW, gridH, gridD, false);
         var size = gridW * gridH * gridD;
-        var sdf = new hl.Bytes(size * 4);
 
         for (i in 0...size) {
             sdf.setI32(i * 4, outside.getI32(i * 4) - inside.getI32(i * 4));
         }
-
-        return sdf;
     }
 
 
@@ -676,65 +681,126 @@ class Engine {
         }
         
         ivec3 gridSize() {
-            return ivec3(256,256,256);
+            return ivec3(64,64,64);
+        }
+
+        vec3 gridMax() {
+            return vec3(64.0,64.0,64.0);
         }
 
         int voxelIndex(ivec3 ip, ivec3 grid) {
             return ip.z * grid.x * grid.y + ip.y * grid.x + ip.x;
         }
 
+        bool isInsideGrid(ivec3 ip, ivec3 grid) {
+            return ip.x >= 0 && ip.y >= 0 && ip.z >= 0 &&
+                ip.x < grid.x && ip.y < grid.y && ip.z < grid.z;
+        }
+
+        bool intersectGrid(vec3 ro, vec3 rd, out float tNear, out float tFar) {
+            vec3 safeDir = rd;
+            if (abs(safeDir.x) < 0.0001) safeDir.x = safeDir.x < 0.0 ? -0.0001 : 0.0001;
+            if (abs(safeDir.y) < 0.0001) safeDir.y = safeDir.y < 0.0 ? -0.0001 : 0.0001;
+            if (abs(safeDir.z) < 0.0001) safeDir.z = safeDir.z < 0.0 ? -0.0001 : 0.0001;
+            vec3 invDir = 1.0 / safeDir;
+            vec3 t0 = (vec3(0.0) - ro) * invDir;
+            vec3 t1 = (gridMax() - ro) * invDir;
+            vec3 tsmaller = min(t0, t1);
+            vec3 tbigger = max(t0, t1);
+
+            tNear = max(max(tsmaller.x, tsmaller.y), tsmaller.z);
+            tFar = min(min(tbigger.x, tbigger.y), tbigger.z);
+
+            return tFar >= max(tNear, 0.0);
+        }
+
         float map(vec3 p) {
             ivec3 grid = gridSize();
             ivec3 ip = ivec3(floor(p));
 
-            //if (abs(p.z) > 0.5) return 1000.0; //gridD == 1
-            if (ip.x < 0 || ip.y < 0 || ip.z < 0 ||
-                ip.x >= grid.x || ip.y >= grid.y || ip.z >= grid.z)
+            if (!isInsideGrid(ip, grid))
                 return 1000.0;
 
             return float(sdf[voxelIndex(ip, grid)]) / 3.0;
         }
 
-        int sampleVoxelColor(vec3 p) {
+        int sampleVoxelColor(ivec3 ip) {
             ivec3 grid = gridSize();
-            ivec3 ip = ivec3(floor(p));
-
-            for (int z = -1; z <= 1; z++) {
-                for (int y = -1; y <= 1; y++) {
-                    for (int x = -1; x <= 1; x++) {
-                        ivec3 sp = ip + ivec3(x, y, z);
-                        if (sp.x < 0 || sp.y < 0 || sp.z < 0 ||
-                            sp.x >= grid.x || sp.y >= grid.y || sp.z >= grid.z)
-                            continue;
-
-                        int c = voxels[voxelIndex(sp, grid)];
-                        if (c != 0) return c;
-                    }
-                }
-            }
-
-            return 0;
+            if (!isInsideGrid(ip, grid)) return 0;
+            return voxels[voxelIndex(ip, grid)];
         }
 
-        vec3 raymarch(vec3 ro, vec3 rd) {
-            float t = 0.0;
+        bool traceScene(vec3 ro, vec3 rd, out vec3 hitPos, out vec3 hitNormal, out int hitColor) {
+            float tNear;
+            float tFar;
+            if (!intersectGrid(ro, rd, tNear, tFar)) return false;
 
-            for (int i = 0; i < 256; i++) {
-                vec3 p = ro + rd * t;
+            float t = max(tNear, 0.0);
+            vec3 p = ro + rd * t;
+            ivec3 grid = gridSize();
+            ivec3 cell = ivec3(clamp(floor(p), vec3(0.0), gridMax() - vec3(1.0)));
 
-                float d = map(p);
+            ivec3 stepDir = ivec3(
+                rd.x > 0.0 ? 1 : -1,
+                rd.y > 0.0 ? 1 : -1,
+                rd.z > 0.0 ? 1 : -1
+            );
 
-                if (d < 0.5) {
-                    int v = sampleVoxelColor(p);
-                    return unpackColor(v);
+            vec3 safeDir = rd;
+            if (abs(safeDir.x) < 0.0001) safeDir.x = safeDir.x < 0.0 ? -0.0001 : 0.0001;
+            if (abs(safeDir.y) < 0.0001) safeDir.y = safeDir.y < 0.0 ? -0.0001 : 0.0001;
+            if (abs(safeDir.z) < 0.0001) safeDir.z = safeDir.z < 0.0 ? -0.0001 : 0.0001;
+
+            vec3 deltaDist = abs(vec3(1.0) / safeDir);
+            vec3 nextBoundary = vec3(
+                rd.x > 0.0 ? float(cell.x + 1) : float(cell.x),
+                rd.y > 0.0 ? float(cell.y + 1) : float(cell.y),
+                rd.z > 0.0 ? float(cell.z + 1) : float(cell.z)
+            );
+            vec3 sideDist = vec3(
+                (nextBoundary.x - p.x) / safeDir.x,
+                (nextBoundary.y - p.y) / safeDir.y,
+                (nextBoundary.z - p.z) / safeDir.z
+            );
+
+            hitColor = 0;
+            hitPos = p;
+            hitNormal = vec3(0.0, 0.0, 0.0);
+
+            for (int i = 0; i < 512; i++) {
+                if (!isInsideGrid(cell, grid) || t > tFar) break;
+
+                hitColor = sampleVoxelColor(cell);
+                if (hitColor != 0) {
+                    hitPos = ro + rd * t;
+                    return true;
                 }
 
-                t += max(d, 0.5); 
-
-                if (t > 300.0) break;
+                if (sideDist.x <= sideDist.y && sideDist.x <= sideDist.z) {
+                    t += sideDist.x;
+                    sideDist.y -= sideDist.x;
+                    sideDist.z -= sideDist.x;
+                    sideDist.x = deltaDist.x;
+                    cell.x += stepDir.x;
+                    hitNormal = vec3(-float(stepDir.x), 0.0, 0.0);
+                } else if (sideDist.y <= sideDist.z) {
+                    t += sideDist.y;
+                    sideDist.x -= sideDist.y;
+                    sideDist.z -= sideDist.y;
+                    sideDist.y = deltaDist.y;
+                    cell.y += stepDir.y;
+                    hitNormal = vec3(0.0, -float(stepDir.y), 0.0);
+                } else {
+                    t += sideDist.z;
+                    sideDist.x -= sideDist.z;
+                    sideDist.y -= sideDist.z;
+                    sideDist.z = deltaDist.z;
+                    cell.z += stepDir.z;
+                    hitNormal = vec3(0.0, 0.0, -float(stepDir.z));
+                }
             }
 
-            return vec3(0.0);
+            return false;
         }
 
         vec3 getNormal(vec3 p) {
@@ -768,26 +834,13 @@ class Engine {
             );
 
             vec3 col = vec3(0.0);
-            float t = 0.0;
+            vec3 hitPos;
+            vec3 hitNormal;
+            int hitColor;
 
-            for (int i = 0; i < 256; i++) {
-                vec3 pos = ro + rd * t;
-                float d = map(pos);
-
-                if (d < 0.5) {
-                    int v = sampleVoxelColor(pos);
-
-                    vec3 n = getNormal(pos);
-
-                    float light = dot(n, normalize(vec3(0.5,1.0,0.3))) * 0.5 + 0.5;
-
-                    col = unpackColor(v) * light;
-                    break;
-                }
-
-                t += max(d, 0.5);
-
-                if (t > 300.0) break;
+            if (traceScene(ro, rd, hitPos, hitNormal, hitColor)) {
+                float light = dot(hitNormal, normalize(vec3(0.5,1.0,0.3))) * 0.5 + 0.5;
+                col = unpackColor(hitColor) * light;
             }
 
             color = vec4(col, 1.0);
@@ -960,7 +1013,7 @@ class Engine {
         GL.uniform4fv(GL.getUniformLocation(shaderRender, "camPos"), b, 0, 1);
 
         var ro = Eight.camPos;
-        var target = Eight.target; //var target = new Vec3(256, 256, 64);
+        var target = Eight.target; //var target = new Vec3(64, 64, 64);
         var forward = target.sub(ro).normalize();
         b = new hl.Bytes(4*4); b.setF32(0, forward[0]); b.setF32(4, forward[1]); b.setF32(8, forward[2]); b.setF32(12, 0.0); 
         GL.uniform4fv(GL.getUniformLocation(shaderRender, "camForward"), b, 0, 1);
@@ -1027,12 +1080,15 @@ class Engine {
         if (screenX < 0 || screenY < 0 || screenX >= n || screenY >= n2) return;
 
         var xi = Std.int(screenX / n * Eight.gridW);
-        var yi = Std.int(screenY / n2 * Eight.gridH);
+        var yi = Std.int(screenY / n2 * n2/n * Eight.gridH);
 
         if (xi < 0 || yi < 0 || xi >= Eight.gridW || yi >= Eight.gridH) return;
 
-        var i:Int = Std.int(Eight.gridD/2) * Eight.gridW * Eight.gridH + yi * Eight.gridW + xi;        
-        Eight.bytes.setI32(i * 4, color); 
+        var i:Int = Std.int(Eight.gridD/2) * Eight.gridW * Eight.gridH + yi * Eight.gridW + xi;
+        if (Eight.bytes.getI32(i * 4) == color) return;
+
+        Eight.bytes.setI32(i * 4, color);
+        Eight.voxelFieldDirty = true;
 
         callOnce = false; 
     } 
