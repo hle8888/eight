@@ -26,6 +26,7 @@ class Object {
 
     public var show:Bool = true;
     public var isUI:Bool = false;
+    public var zlayer:Int = 0;
 
     public function new(sizeX:Int=61, sizeY:Int=61, texturePath:String=null, _color:Int=0x000000) {
         setSize(sizeX, sizeY);
@@ -54,6 +55,10 @@ class Object {
         pos = [x, y, z];
     }
 
+    public inline function setPosV3(_pos:Vec3) {
+        pos = _pos;
+    }
+
     public inline function getCenterPos() {
         return pos.add(-new Vec3(sizeX / 2, sizeY / 2, sizeZ / 2));
     }
@@ -76,6 +81,8 @@ class Object {
         sizeX = _sizeX;
         sizeY = _sizeY;
     }
+
+    public function update(dt:Float) { }
 
     public function draw() {
         if(!show) return;
@@ -133,7 +140,7 @@ class Object {
         return mx > pos[0] - sizeX/2 && mx < pos[0] + sizeX/2 && my > pos[1] - sizeY/2 && my < pos[1] + sizeY/2;
     }
 
-    public function setOutline(outline:Bool=true) {
+    public function setOutline(outline:Bool=true, color:Int=0x2CA52C) {
         inline function areNeighborsColored(x:Int, y:Int, limitX:Int, limitY:Int):Bool {
             if (x == limitX - 1 || x == 0 || y == limitY - 1 || y == 0) return true;
             if (texture.tex[x][y] == 0) return true; 
@@ -151,7 +158,7 @@ class Object {
                     outlineTexture.tex[x][y] = texture.tex[x][y];
                     standartTexture.tex[x][y] = texture.tex[x][y];
                     if (areNeighborsColored(x, y, limitX, limitY)) {
-                        outlineTexture.tex[x][y] = 0x2CA52C;
+                        outlineTexture.tex[x][y] = color;
                     }
                 }
             }
@@ -257,9 +264,9 @@ class Circle extends Object {
         }
     }
 
-    public override function setOutline(outline:Bool=true) {
+    public override function setOutline(outline:Bool=true, color:Int=0x2CA52C) {
         if (selected)
-            color = 0x4A9E51;
+            this.color = color;
         else 
             color = 0xD6D3D3;
     }
@@ -298,11 +305,12 @@ class Eight {
     public static var objSize:Int;
 
     public static var bytes:hl.Bytes; 
+    public static var distBytes:hl.Bytes;
     public static var voxelCount:Int;
-    public static var gridW = 256; public static var gridH = 256; public static var gridD = 128;
+    public static var gridW = 256; public static var gridH = 256; public static var gridD = 256;
 
-    public static var camPos = new Vec3(100, 128, 100);
-    public static var target = new Vec3(128, 128, 64);
+    public static var camPos = new Vec3(128, 128, 200);
+    public static var target = new Vec3(128, 128, 128);
     public function runMainLoop() {
         var first = true;
         while(Sdl.processEvents(onEvent) && run) {
@@ -311,10 +319,11 @@ class Eight {
             lastTime = now;
 
             //Engine.vertices = [];
-            camPos[0] -= 1 * dt;
+            //camPos[0] -= 1 * dt;
             if (first) {
                 voxelCount = gridW * gridH * gridD;
                 bytes = new hl.Bytes(voxelCount * 4);
+                distBytes = new hl.Bytes(voxelCount * 4);
                 for (z in 0...gridD)
                 for (y in 0...gridH)
                 for (x in 0...gridW) {
@@ -365,20 +374,35 @@ class Eight {
                     } else if (inside)
                         bytes.setI32(i * 4, 0x00FF2A);
                     else
-                        bytes.setI32(i * 4, 0x000000); 
+                        bytes.setI32(i * 4, 0x000000);
+                    
                 } 
+
+                distBytes = buildDistanceField(bytes, gridW, gridH, gridD);
 
                 GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.ssbo);
                 GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, bytes, GL.DYNAMIC_DRAW);
-                //var distField = buildDistanceField(bytes, gridW, gridH, gridD);
-                //GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, distField, GL.DYNAMIC_DRAW);
                 GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 0, Engine.ssbo); 
+
+                GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.distSsbo);
+                GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, distBytes, GL.DYNAMIC_DRAW);
+                GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 1, Engine.distSsbo); 
 
                 first = false;
             }
 
-            //var i:Int = -1; while(++i < objects.length) objects[i].draw(); 
-            //update(dt); for(updateCb in updateCallbacks) updateCb(dt);
+            var i:Int = -1; while(++i < objects.length) objects[i].draw(); 
+            update(dt); for(updateCb in updateCallbacks) updateCb(dt);
+
+            distBytes = buildDistanceField(bytes, gridW, gridH, gridD);
+
+            GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.ssbo);
+            GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, bytes, GL.DYNAMIC_DRAW);
+            GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 0, Engine.ssbo); 
+
+            GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, Engine.distSsbo);
+            GL.bufferData(GL.SHADER_STORAGE_BUFFER, voxelCount * 4, distBytes, GL.DYNAMIC_DRAW);
+            GL.bindBufferBase(GL.SHADER_STORAGE_BUFFER, 1, Engine.distSsbo); 
 
             //Engine.drawDot(0, 0, 0); // центр экрана
             //Engine.drawCube(0, 0, 0, 0.5);  // куб в центре экрана, размер 0.5
@@ -403,79 +427,102 @@ class Eight {
         }
     }
 
-    function buildDistanceField(src:hl.Bytes, gridW:Int, gridH:Int, gridD:Int):hl.Bytes {
+    static inline function voxelIndex(x:Int, y:Int, z:Int, gridW:Int, gridH:Int):Int {
+        return z * gridW * gridH + y * gridW + x;
+    }
+
+    static function buildDistancePass(src:hl.Bytes, gridW:Int, gridH:Int, gridD:Int, targetFilled:Bool):hl.Bytes {
         var size = gridW * gridH * gridD;
         var dist = new hl.Bytes(size * 4);
+        var inf = 1 << 28;
 
-        var INF = 1 << 30;
+        inline function relax(x:Int, y:Int, z:Int, nx:Int, ny:Int, nz:Int, weight:Int, current:Int):Int {
+            if (nx < 0 || ny < 0 || nz < 0 || nx >= gridW || ny >= gridH || nz >= gridD) return current;
 
-        inline function idx(x:Int, y:Int, z:Int):Int {
-            return z * gridW * gridH + y * gridW + x;
-        }
+            var candidate = dist.getI32(voxelIndex(nx, ny, nz, gridW, gridH) * 4);
+            if (candidate >= inf - weight) return current;
 
-        for (i in 0...size) {
-            var v = src.getI32(i * 4);
-            dist.setI32(i * 4, v != 0 ? 0 : INF);
+            candidate += weight;
+            return candidate < current ? candidate : current;
         }
 
         for (z in 0...gridD)
         for (y in 0...gridH)
         for (x in 0...gridW) {
-            var i = idx(x,y,z);
-            var d = dist.getI32(i*4);
-
-            if (x > 0)   d = Std.int(Math.min(d, dist.getI32(idx(x-1,y,z)*4) + 1));
-            if (y > 0)   d = Std.int(Math.min(d, dist.getI32(idx(x,y-1,z)*4) + 1));
-            if (z > 0)   d = Std.int(Math.min(d, dist.getI32(idx(x,y,z-1)*4) + 1));
-
-            if (x>0 && y>0)
-                d = Std.int(Math.min(d, dist.getI32(idx(x-1,y-1,z)*4) + 2));
-
-            if (x>0 && z>0)
-                d = Std.int(Math.min(d, dist.getI32(idx(x-1,y,z-1)*4) + 2));
-
-            if (y>0 && z>0)
-                d = Std.int(Math.min(d, dist.getI32(idx(x,y-1,z-1)*4) + 2));
-
-            dist.setI32(i*4, d);
+            var i = voxelIndex(x, y, z, gridW, gridH);
+            var filled = src.getI32(i * 4) != 0;
+            dist.setI32(i * 4, filled == targetFilled ? 0 : inf);
         }
 
-        // === 3️⃣ backward pass ===
+        for (z in 0...gridD)
+        for (y in 0...gridH)
+        for (x in 0...gridW) {
+            var i = voxelIndex(x, y, z, gridW, gridH);
+            var d = dist.getI32(i * 4);
+
+            d = relax(x, y, z, x - 1, y, z, 3, d);
+            d = relax(x, y, z, x, y - 1, z, 3, d);
+            d = relax(x, y, z, x, y, z - 1, 3, d);
+
+            d = relax(x, y, z, x - 1, y - 1, z, 4, d);
+            d = relax(x, y, z, x + 1, y - 1, z, 4, d);
+            d = relax(x, y, z, x - 1, y, z - 1, 4, d);
+            d = relax(x, y, z, x + 1, y, z - 1, 4, d);
+            d = relax(x, y, z, x, y - 1, z - 1, 4, d);
+            d = relax(x, y, z, x, y + 1, z - 1, 4, d);
+
+            d = relax(x, y, z, x - 1, y - 1, z - 1, 5, d);
+            d = relax(x, y, z, x + 1, y - 1, z - 1, 5, d);
+            d = relax(x, y, z, x - 1, y + 1, z - 1, 5, d);
+            d = relax(x, y, z, x + 1, y + 1, z - 1, 5, d);
+
+            dist.setI32(i * 4, d);
+        }
+
         for (z in 0...gridD) {
             var zz = gridD - 1 - z;
             for (y in 0...gridH) {
                 var yy = gridH - 1 - y;
                 for (x in 0...gridW) {
                     var xx = gridW - 1 - x;
+                    var i = voxelIndex(xx, yy, zz, gridW, gridH);
+                    var d = dist.getI32(i * 4);
 
-                    var i = idx(xx,yy,zz);
-                    var d = dist.getI32(i*4);
+                    d = relax(xx, yy, zz, xx + 1, yy, zz, 3, d);
+                    d = relax(xx, yy, zz, xx, yy + 1, zz, 3, d);
+                    d = relax(xx, yy, zz, xx, yy, zz + 1, 3, d);
 
-                    if (xx < gridW-1)
-                        d = Std.int(Math.min(d, dist.getI32(idx(xx+1,yy,zz)*4) + 1));
+                    d = relax(xx, yy, zz, xx + 1, yy + 1, zz, 4, d);
+                    d = relax(xx, yy, zz, xx - 1, yy + 1, zz, 4, d);
+                    d = relax(xx, yy, zz, xx + 1, yy, zz + 1, 4, d);
+                    d = relax(xx, yy, zz, xx - 1, yy, zz + 1, 4, d);
+                    d = relax(xx, yy, zz, xx, yy + 1, zz + 1, 4, d);
+                    d = relax(xx, yy, zz, xx, yy - 1, zz + 1, 4, d);
 
-                    if (yy < gridH-1)
-                        d = Std.int(Math.min(d, dist.getI32(idx(xx,yy+1,zz)*4) + 1));
+                    d = relax(xx, yy, zz, xx + 1, yy + 1, zz + 1, 5, d);
+                    d = relax(xx, yy, zz, xx - 1, yy + 1, zz + 1, 5, d);
+                    d = relax(xx, yy, zz, xx + 1, yy - 1, zz + 1, 5, d);
+                    d = relax(xx, yy, zz, xx - 1, yy - 1, zz + 1, 5, d);
 
-                    if (zz < gridD-1)
-                        d = Std.int(Math.min(d, dist.getI32(idx(xx,yy,zz+1)*4) + 1));
-
-                    // диагонали
-                    if (xx < gridW-1 && yy < gridH-1)
-                        d = Std.int(Math.min(d, dist.getI32(idx(xx+1,yy+1,zz)*4) + 2));
-
-                    if (xx < gridW-1 && zz < gridD-1)
-                        d = Std.int(Math.min(d, dist.getI32(idx(xx+1,yy,zz+1)*4) + 2));
-
-                    if (yy < gridH-1 && zz < gridD-1)
-                        d = Std.int(Math.min(d, dist.getI32(idx(xx,yy+1,zz+1)*4) + 2));
-
-                    dist.setI32(i*4, d);
+                    dist.setI32(i * 4, d);
                 }
             }
         }
 
         return dist;
+    }
+
+    static function buildDistanceField(src:hl.Bytes, gridW:Int, gridH:Int, gridD:Int):hl.Bytes {
+        var outside = buildDistancePass(src, gridW, gridH, gridD, true);
+        var inside = buildDistancePass(src, gridW, gridH, gridD, false);
+        var size = gridW * gridH * gridD;
+        var sdf = new hl.Bytes(size * 4);
+
+        for (i in 0...size) {
+            sdf.setI32(i * 4, outside.getI32(i * 4) - inside.getI32(i * 4));
+        }
+
+        return sdf;
     }
 
 
@@ -526,13 +573,13 @@ class Eight {
         return true;
     }
 
-    public function update(dt:Float) { }
-
     public static inline function distance(pos1:Vec3, pos2:Vec3):Float {
         var dx = pos1[0] - pos2[0];
         var dy = pos1[1] - pos2[1];
         return Math.sqrt(dx*dx + dy*dy);
     }
+
+    public function update(dt:Float) { }
 }
 
 class Engine {
@@ -559,10 +606,12 @@ class Engine {
     static var shaderCompute:sdl.Program;
     static var shaderRender:sdl.Program;
     static var shaderSpace:sdl.Program;
-    public static var ssbo:sdl.Buffer;    
+    public static var ssbo:sdl.Buffer;   
+    public static var distSsbo:sdl.Buffer;
     public static function initShaderEngine() {
         ssbo = GL.createBuffer();
         GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, ssbo);
+        distSsbo = GL.createBuffer();
 
         //shaderSpace = compileShader(GL.createShader(GL.VERTEX_SHADER), vertexSrcQuad, false);
         //shaderSpace = compileShader(GL.createShader(GL.FRAGMENT_SHADER), fragSrcQuadSpace, true, shaderSpace);
@@ -615,7 +664,8 @@ class Engine {
 
         out vec4 color;               // выходной цвет
 
-        layout(std430, binding = 0) buffer Voxels { int voxels[]; }; // layout(std430, binding = 0) buffer Objects { vec4 objs[]; // x,y,r,color };
+        layout(std430, binding = 0) buffer Voxels { int voxels[]; };
+        layout(std430, binding = 1) buffer DistanceField { int sdf[]; };
 
         vec3 unpackColor(int c) {
             return vec3(
@@ -625,8 +675,16 @@ class Engine {
             ) * 0.00392156862; // 1/255
         }
         
+        ivec3 gridSize() {
+            return ivec3(256,256,256);
+        }
+
+        int voxelIndex(ivec3 ip, ivec3 grid) {
+            return ip.z * grid.x * grid.y + ip.y * grid.x + ip.x;
+        }
+
         float map(vec3 p) {
-            ivec3 grid = ivec3(256,256,128);
+            ivec3 grid = gridSize();
             ivec3 ip = ivec3(floor(p));
 
             //if (abs(p.z) > 0.5) return 1000.0; //gridD == 1
@@ -634,30 +692,44 @@ class Engine {
                 ip.x >= grid.x || ip.y >= grid.y || ip.z >= grid.z)
                 return 1000.0;
 
-            int idx = ip.z * grid.x * grid.y + ip.y * grid.x + ip.x;
-            int v = voxels[idx];
+            return float(sdf[voxelIndex(ip, grid)]) / 3.0;
+        }
 
-            if (v != 0) return 0.0; // поверхность
+        int sampleVoxelColor(vec3 p) {
+            ivec3 grid = gridSize();
+            ivec3 ip = ivec3(floor(p));
 
-            return 1.0;
+            for (int z = -1; z <= 1; z++) {
+                for (int y = -1; y <= 1; y++) {
+                    for (int x = -1; x <= 1; x++) {
+                        ivec3 sp = ip + ivec3(x, y, z);
+                        if (sp.x < 0 || sp.y < 0 || sp.z < 0 ||
+                            sp.x >= grid.x || sp.y >= grid.y || sp.z >= grid.z)
+                            continue;
+
+                        int c = voxels[voxelIndex(sp, grid)];
+                        if (c != 0) return c;
+                    }
+                }
+            }
+
+            return 0;
         }
 
         vec3 raymarch(vec3 ro, vec3 rd) {
             float t = 0.0;
 
-            for (int i = 0; i < 64; i++) {
+            for (int i = 0; i < 256; i++) {
                 vec3 p = ro + rd * t;
 
                 float d = map(p);
 
                 if (d < 0.5) {
-                    ivec3 ip = ivec3(floor(p));
-                    int idx = ip.z * 256 * 256 + ip.y * 256 + ip.x;
-                    int v = voxels[idx];
+                    int v = sampleVoxelColor(p);
                     return unpackColor(v);
                 }
 
-                t += d; 
+                t += max(d, 0.5); 
 
                 if (t > 300.0) break;
             }
@@ -666,7 +738,7 @@ class Engine {
         }
 
         vec3 getNormal(vec3 p) {
-            float e = 0.5;
+            float e = 1.0;
 
             float dx = map(p + vec3(e,0,0)) - map(p - vec3(e,0,0));
             float dy = map(p + vec3(0,e,0)) - map(p - vec3(0,e,0));
@@ -698,24 +770,22 @@ class Engine {
             vec3 col = vec3(0.0);
             float t = 0.0;
 
-            for (int i = 0; i < 64; i++) {
+            for (int i = 0; i < 256; i++) {
                 vec3 pos = ro + rd * t;
                 float d = map(pos);
 
                 if (d < 0.5) {
-                    ivec3 ip = ivec3(floor(pos));
-                    int idx = ip.z * 256 * 256 + ip.y * 256 + ip.x;
-                    int v = voxels[idx];
+                    int v = sampleVoxelColor(pos);
 
                     vec3 n = getNormal(pos);
 
                     float light = dot(n, normalize(vec3(0.5,1.0,0.3))) * 0.5 + 0.5;
 
-                    col = unpackColor(v);// * light;
+                    col = unpackColor(v) * light;
                     break;
                 }
 
-                t += d;
+                t += max(d, 0.5);
 
                 if (t > 300.0) break;
             }
@@ -882,6 +952,7 @@ class Engine {
         GL.memoryBarrier(GL.SHADER_STORAGE_BARRIER_BIT); */
      
         GL.activeTexture(GL.TEXTURE0);
+        GL.bindBuffer(GL.SHADER_STORAGE_BUFFER, ssbo);
         GL.getBufferSubData(GL.SHADER_STORAGE_BUFFER, 0, data, 0, count);
         GL.texImage2D(GL.TEXTURE_2D, 0, GL.RGBA, n, n2, 0, GL.RGBA, GL.UNSIGNED_BYTE, data);
         GL.useProgram(shaderRender);        
@@ -889,7 +960,7 @@ class Engine {
         GL.uniform4fv(GL.getUniformLocation(shaderRender, "camPos"), b, 0, 1);
 
         var ro = Eight.camPos;
-        var target = Eight.target; //var target = new Vec3(128, 128, 64);
+        var target = Eight.target; //var target = new Vec3(256, 256, 64);
         var forward = target.sub(ro).normalize();
         b = new hl.Bytes(4*4); b.setF32(0, forward[0]); b.setF32(4, forward[1]); b.setF32(8, forward[2]); b.setF32(12, 0.0); 
         GL.uniform4fv(GL.getUniformLocation(shaderRender, "camForward"), b, 0, 1);
@@ -943,26 +1014,21 @@ class Engine {
     static var callOnce = true;
     public static inline function drawDot(x:Float = 0.0, y:Float = 0.0, z:Float = 0.0, color:Int = 0xFF79786B, isUI:Bool=false) {
         //if (!callOnce) return;
-        var xi = cast x;
-        var yi = cast y;
         if (isUI) return;
+        
+        var screenX:Float = x;
+        var screenY:Float = y;
         if (!isUI) {
             var screenPos = worldToScreen(x, y);
-            xi = Std.int(screenPos[0]);
-            yi = Std.int(screenPos[1]);
+            screenX = screenPos[0];
+            screenY = screenPos[1];
         }
         
-        if (xi < 1 || yi < 1 || xi > n - 1|| yi > n2 - 1) return;
-        xi = Std.int(xi * Eight.gridW / n);
-        yi = Std.int(yi * Eight.gridH / n2 * n2/n);
+        if (screenX < 0 || screenY < 0 || screenX >= n || screenY >= n2) return;
 
+        var xi = Std.int(screenX / n * Eight.gridW);
+        var yi = Std.int(screenY / n2 * Eight.gridH);
 
-        //xi = Std.int(xi / Eight.gridW - 0.5);
-        //yi = Std.int(yi / Eight.gridH - 0.5);
-
-        //var gx = Std.int(fx * Eight.gridW + Eight.gridW * 0.5);
-        //var gy = Std.int(fy * Eight.gridH + Eight.gridH * 0.5);
-        //trace(xi, yi);
         if (xi < 0 || yi < 0 || xi >= Eight.gridW || yi >= Eight.gridH) return;
 
         var i:Int = Std.int(Eight.gridD/2) * Eight.gridW * Eight.gridH + yi * Eight.gridW + xi;        
